@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package soundboard;
+
+// Audio processing service
+service AudioProcessor {
+  // Extract audio from video file
+  rpc ExtractAudio(ExtractAudioRequest) returns (ExtractAudioResponse);
+  
+  // Get audio file information
+  rpc GetAudioInfo(AudioInfoRequest) returns (AudioInfoResponse);
+  
+  // Apply audio effects (future enhancement)
+  rpc ApplyEffects(ApplyEffectsRequest) returns (ApplyEffectsResponse);
+}
+
+// Request to extract audio from video
+message ExtractAudioRequest {
+  string video_path = 1;           // Path to video file
+  string output_path = 2;          // Where to save audio
+  string format = 3;               // Output format (mp3, wav, ogg)
+  int32 bitrate_kbps = 4;         // Audio bitrate (e.g., 192)
+}
+
+// Response after extracting audio
+message ExtractAudioResponse {
+  bool success = 1;
+  string audio_path = 2;
+  float duration_seconds = 3;
+  int64 file_size_bytes = 4;
+  string error_message = 5;
+}
+
+// Request to get audio info
+message AudioInfoRequest {
+  string audio_path = 1;
+}
+
+// Audio file metadata
+message AudioInfoResponse {
+  float duration_seconds = 1;
+  int32 sample_rate = 2;
+  int32 channels = 3;
+  int32 bitrate_kbps = 4;
+  string format = 5;
+}
+
+// Request to apply effects
+message ApplyEffectsRequest {
+  string audio_path = 1;
+  string output_path = 2;
+  float speed_factor = 3;         // 0.5 to 2.0 (1.0 = normal)
+  float pitch_semitones = 4;      // -12 to +12 (0 = normal)
+}
+
+// Response after applying effects
+message ApplyEffectsResponse {
+  bool success = 1;
+  string processed_audio_path = 2;
+  string error_message = 3;
+}

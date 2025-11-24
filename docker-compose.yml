@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: soundboard-db
+    environment:
+      POSTGRES_DB: soundboard
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpass123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - soundboard-network
+
+  # C++ Audio Processing Service
+  audio-processor:
+    build:
+      context: ./audio-processor-service
+      dockerfile: Dockerfile
+    container_name: soundboard-audio-processor
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./temp_audio:/tmp/audio
+    networks:
+      - soundboard-network
+    restart: unless-stopped
+
+  # Java Spring Boot API
+  api:
+    build:
+      context: ./soundboard-api
+      dockerfile: Dockerfile
+    container_name: soundboard-api
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/soundboard
+      SPRING_DATASOURCE_USERNAME: devuser
+      SPRING_DATASOURCE_PASSWORD: devpass123
+      GRPC_AUDIO_PROCESSOR_HOST: audio-processor
+      GRPC_AUDIO_PROCESSOR_PORT: 50051
+    depends_on:
+      postgres:
+        condition: service_healthy
+      audio-processor:
+        condition: service_started
+    volumes:
+      - ./uploads:/app/uploads
+      - ./audio:/app/audio
+      - ./thumbnails:/app/thumbnails
+    networks:
+      - soundboard-network
+    restart: unless-stopped
+
+  # React Frontend (in progress)
+  frontend:
+    image: node:20
+    container_name: soundboard-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./soundboard-frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    depends_on:
+      - api
+    networks:
+      - soundboard-network
+
+volumes:
+  postgres_data:
+
+networks:
+  soundboard-network:
+    driver: bridge

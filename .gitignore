@@ -1,0 +1,55 @@
+# Database
+postgres_data/
+
+# Java
+*.class
+*.jar
+*.war
+target/
+.mvn/
+mvnw
+mvnw.cmd
+!.mvn/wrapper/maven-wrapper.jar
+
+# C++
+build/
+*.o
+*.so
+*.a
+*.exe
+cmake-build-*/
+
+# Node
+node_modules/
+build/
+dist/
+.vite/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env.local
+.env
+*.log
+
+# Uploads (for local testing)
+uploads/
+audio/
+thumbnails/
+temp_audio/
+
+# Dont ignore Dockerfiles
+!**/Dockerfile
