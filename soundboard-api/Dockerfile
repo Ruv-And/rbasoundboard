@@ -1,15 +1,20 @@
 # Multi-stage build with gRPC code generation
 
 # Stage 1: Generate gRPC code
-FROM maven:3.9-eclipse-temurin-21 AS proto-builder
+# Use Eclipse Temurin JDK 25 for builds. If an official Maven image with
+# `eclipse-temurin-25` tag is not available on your registry, change this
+# back to `eclipse-temurin-21` or build with the repo's Dockerfile using JDK21.
+FROM maven:3.9-eclipse-temurin-25 AS proto-builder
 
 WORKDIR /build
 
 # Install protoc
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
-# Copy proto files
-COPY ../proto /build/proto
+# Copy proto files (expects `proto/` to be available in the build context)
+# When building with Docker Compose from the repo root set the build context to '.'
+# so this `COPY proto` will pick up the top-level `proto/` directory.
+COPY proto /build/proto
 
 # Generate Java protobuf code
 RUN mkdir -p /build/generated/java && \
@@ -29,7 +34,8 @@ RUN protoc --proto_path=/build/proto \
            /build/proto/audio_processor.proto
 
 # Stage 2: Build application
-FROM maven:3.9-eclipse-temurin-21 AS builder
+# Build stage using Maven on Temurin JDK 25
+FROM maven:3.9-eclipse-temurin-25 AS builder
 
 WORKDIR /build
 
@@ -45,9 +51,10 @@ COPY src ./src
 
 # Build the application
 RUN mvn clean package -DskipTests
-
+ 
 # Stage 3: Runtime
-FROM eclipse-temurin:21-jre-jammy
+# Runtime stage using Temurin JRE 25
+FROM eclipse-temurin:25-jre-jammy
 
 WORKDIR /app
 

@@ -52,12 +52,20 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Use Spring Boot's official Flyway starter (managed by Spring Boot parent) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+            <version>4.0.0</version>
+        </dependency>
+        <!-- Spring Boot 4 requires the Flyway starter to enable auto-configuration -->
         
-        <!-- Lombok -->
+        <!-- Lombok (updated to a version with newer JDK support) -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
-            <optional>true</optional>
+            <version>1.18.42</version>
+            <scope>provided</scope>
         </dependency>
         
         <!-- gRPC -->
@@ -92,6 +100,28 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>${java.version}</release>
+                    <fork>true</fork>
+                    <compilerArgs>
+                        <!-- Open internal packages for annotation processors (Lombok, others) -->
+                        <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.lang.invoke=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.42</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
