@@ -1,20 +1,24 @@
-# Use Ubuntu as base image
-FROM ubuntu:22.04
+########################################
+# Multi-stage build: builder -> runtime
+########################################
 
-# Avoid interactive prompts
+### Builder stage: compile gRPC and the audio server
+FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies and runtime libraries
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     pkg-config \
     git \
-    # gRPC and Protobuf
-    libgrpc++-dev \
+    ca-certificates \
+    wget \
+    unzip \
+    # Protobuf dev
     libprotobuf-dev \
-    protobuf-compiler-grpc \
-    # FFmpeg for audio processing
+    protobuf-compiler \
+    # FFmpeg dev libs (optional for linking)
     ffmpeg \
     libavcodec-dev \
     libavformat-dev \
@@ -22,26 +26,50 @@ RUN apt-get update && apt-get install -y \
     libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Build and install gRPC C++ from source (provides gRPCConfig.cmake)
+RUN git clone -b 20230802.0 https://github.com/abseil/abseil-cpp /tmp/abseil && \
+    cd /tmp/abseil && mkdir -p build && cd build && \
+    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    make -j$(nproc) && make install && ldconfig && rm -rf /tmp/abseil
+
+# Build and install gRPC C++ from source (provides gRPCConfig.cmake)
+RUN git clone -b v1.60.0 --recurse-submodules https://github.com/grpc/grpc /tmp/grpc && \
+    cd /tmp/grpc && mkdir -p cmake/build && cd cmake/build && \
+    cmake ../.. -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    make -j$(nproc) && make install && ldconfig && \
+    rm -rf /tmp/grpc
+
+# App source
 WORKDIR /app
+COPY proto /app/proto
+COPY audio-processor-service/CMakeLists.txt /app/
+COPY audio-processor-service/src /app/src
 
-# Copy proto files (shared between services)
-COPY ../proto /app/proto
+# Build the audio server
+RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
 
-# Copy source code
-COPY CMakeLists.txt /app/
-COPY src /app/src
 
-# Build the application
-RUN mkdir -p build && cd build && \
-    cmake .. && \
-    make -j$(nproc)
+### Runtime stage: small image with only runtime deps + binary
+FROM debian:bookworm-slim AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install only runtime dependencies (ffmpeg + libs)
+RUN apt-get update && apt-get install -y \
+    libstdc++6 \
+    libgcc-s1 \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary and runtime libraries from builder
+COPY --from=builder /app/build/audio_server /usr/local/bin/audio_server
+COPY --from=builder /usr/local/lib /usr/local/lib
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 # Create temp directory for audio processing
 RUN mkdir -p /tmp/audio
 
-# Expose gRPC port
 EXPOSE 50051
 
-# Run the server
-CMD ["./build/audio_server"]
+ENTRYPOINT ["/usr/local/bin/audio_server"]

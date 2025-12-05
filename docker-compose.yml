@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # PostgreSQL Database
@@ -6,16 +6,17 @@ services:
     image: postgres:15
     container_name: soundboard-db
     environment:
-      POSTGRES_DB: soundboard
-      POSTGRES_USER: devuser
-      POSTGRES_PASSWORD: devpass123
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U devuser"]
+      # check the actual application database (soundboard) rather than the default DB named after the user
+      test: ["CMD-SHELL", "pg_isready -U devuser -d soundboard"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,8 +26,9 @@ services:
   # C++ Audio Processing Service
   audio-processor:
     build:
-      context: ./audio-processor-service
-      dockerfile: Dockerfile
+      # Use repo root as build context so the Dockerfile can COPY ../proto
+      context: .
+      dockerfile: ./audio-processor-service/Dockerfile
     container_name: soundboard-audio-processor
     ports:
       - "50051:50051"
@@ -39,8 +41,8 @@ services:
   # Java Spring Boot API
   api:
     build:
-      context: ./soundboard-api
-      dockerfile: Dockerfile
+      context: . # repo root, so `proto/` is available
+      dockerfile: ./soundboard-api/Dockerfile
     container_name: soundboard-api
     ports:
       - "8080:8080"
@@ -65,21 +67,19 @@ services:
 
   # React Frontend (in progress)
   frontend:
-    image: node:20
+    build:
+      context: ./soundboard-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
     container_name: soundboard-frontend
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host"
     ports:
-      - "5173:5173"
-    volumes:
-      - ./soundboard-frontend:/app
-      - /app/node_modules
-    environment:
-      - VITE_API_URL=http://localhost:8080
+      - "80:80"
     depends_on:
       - api
     networks:
       - soundboard-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

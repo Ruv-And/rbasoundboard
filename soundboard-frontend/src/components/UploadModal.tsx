@@ -1,52 +1,64 @@
-import React, { useState } from 'react';
-import { clipService } from '../services/api';
+import React, { useState } from "react";
+import { clipService } from "../services/api";
 
-const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
-  const [file, setFile] = useState(null);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [uploadedBy, setUploadedBy] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState('');
+interface UploadModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onUploadSuccess: () => void;
+}
 
-  const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
+const UploadModal: React.FC<UploadModalProps> = ({
+  isOpen,
+  onClose,
+  onUploadSuccess,
+}) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [title, setTitle] = useState<string>("");
+  const [description, setDescription] = useState<string>("");
+  const [uploadedBy, setUploadedBy] = useState<string>("");
+  const [uploading, setUploading] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0] ?? null;
     if (selectedFile) {
       setFile(selectedFile);
-      // Auto-fill title from filename
       if (!title) {
-        const name = selectedFile.name.replace(/\.[^/.]+$/, '');
+        const name = selectedFile.name.replace(/\.[^/.]+$/, "");
         setTitle(name);
       }
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!file || !title) {
-      setError('Please select a file and enter a title');
+      setError("Please select a file and enter a title");
       return;
     }
 
     setUploading(true);
-    setError('');
+    setError("");
 
     try {
-      await clipService.uploadClip(file, title, description, uploadedBy || 'anonymous');
-      
-      // Reset form
+      await clipService.uploadClip(
+        file,
+        title,
+        description,
+        uploadedBy || "anonymous"
+      );
+
       setFile(null);
-      setTitle('');
-      setDescription('');
-      setUploadedBy('');
-      
-      // Notify parent
+      setTitle("");
+      setDescription("");
+      setUploadedBy("");
+
       onUploadSuccess();
       onClose();
-    } catch (err) {
-      console.error('Upload error:', err);
-      setError(err.response?.data?.message || 'Failed to upload file');
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      setError(err?.response?.data?.message || "Failed to upload file");
     } finally {
       setUploading(false);
     }
@@ -68,7 +80,6 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
         </div>
 
         <form onSubmit={handleSubmit}>
-          {/* File Input */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Video/Audio File *
@@ -82,12 +93,12 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
             />
             {file && (
               <p className="mt-1 text-sm text-gray-500">
-                Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)}{" "}
+                MB)
               </p>
             )}
           </div>
 
-          {/* Title */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Title *
@@ -102,7 +113,6 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
             />
           </div>
 
-          {/* Description */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Description
@@ -112,11 +122,10 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
               onChange={(e) => setDescription(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Optional description..."
-              rows="3"
+              rows={3}
             />
           </div>
 
-          {/* Uploaded By */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Your Name
@@ -130,14 +139,12 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
             />
           </div>
 
-          {/* Error Message */}
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
               {error}
             </div>
           )}
 
-          {/* Buttons */}
           <div className="flex gap-3">
             <button
               type="button"
@@ -152,7 +159,7 @@ const UploadModal = ({ isOpen, onClose, onUploadSuccess }) => {
               className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors disabled:bg-gray-300"
               disabled={uploading}
             >
-              {uploading ? 'Uploading...' : 'Upload'}
+              {uploading ? "Uploading..." : "Upload"}
             </button>
           </div>
         </form>

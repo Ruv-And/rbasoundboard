@@ -3,6 +3,10 @@
 # Stage 1: Build React app
 FROM node:20 AS builder
 
+# allow providing the API URL at build-time so Vite can inline it
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+
 WORKDIR /app
 
 # Copy package files
@@ -14,7 +18,7 @@ RUN npm ci
 # Copy source
 COPY . .
 
-# Build for production
+# Build for production (reads VITE_API_URL from env at build time)
 RUN npm run build
 
 # Stage 2: Serve with Nginx

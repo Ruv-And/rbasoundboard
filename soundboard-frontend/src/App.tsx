@@ -3,12 +3,12 @@ import { clipService } from './services/api';
 import ClipCard from './components/ClipCard';
 import UploadModal from './components/UploadModal';
 
-function App() {
-  const [clips, setClips] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [currentAudio, setCurrentAudio] = useState(null);
+const App: React.FC = () => {
+  const [clips, setClips] = useState<any[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     loadClips();
@@ -28,30 +28,28 @@ function App() {
     }
   };
 
-  const handlePlay = (clip) => {
+  const handlePlay = (clip: any) => {
     if (!clip.audioUrl) {
       alert('Audio not available yet. The clip may still be processing.');
       return;
     }
-    
-    // Stop current audio if playing
+
     if (currentAudio) {
       currentAudio.pause();
     }
-    
-    // Create and play new audio
+
     const audio = new Audio(clip.audioUrl);
     audio.play();
     setCurrentAudio(audio);
-    
+
     console.log('Playing:', clip.title);
   };
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (id: string | number) => {
     if (!window.confirm('Are you sure you want to delete this clip?')) {
       return;
     }
-    
+
     try {
       await clipService.deleteClip(id);
       setClips(clips.filter(clip => clip.id !== id));
@@ -62,24 +60,19 @@ function App() {
   };
 
   const handleUploadSuccess = () => {
-    loadClips(); // Reload clips after upload
+    loadClips();
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
       <header className="bg-white shadow-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                🎵 Soundboard
-              </h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Your collection of funny moments
-              </p>
+              <h1 className="text-3xl font-bold text-gray-900">🎵 Soundboard</h1>
+              <p className="text-sm text-gray-500 mt-1">Your collection of funny moments</p>
             </div>
-            
+
             <button
               onClick={() => setIsUploadModalOpen(true)}
               className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors shadow-md hover:shadow-lg"
@@ -90,9 +83,7 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Loading State */}
         {loading && (
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
@@ -100,7 +91,6 @@ function App() {
           </div>
         )}
 
-        {/* Error State */}
         {error && (
           <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
             <div className="flex">
@@ -116,16 +106,11 @@ function App() {
           </div>
         )}
 
-        {/* Empty State */}
         {!loading && clips.length === 0 && !error && (
           <div className="text-center py-12">
             <div className="text-6xl mb-4">🎤</div>
-            <h2 className="text-2xl font-semibold text-gray-700 mb-2">
-              No clips yet!
-            </h2>
-            <p className="text-gray-500 mb-6">
-              Upload your first funny moment to get started.
-            </p>
+            <h2 className="text-2xl font-semibold text-gray-700 mb-2">No clips yet!</h2>
+            <p className="text-gray-500 mb-6">Upload your first funny moment to get started.</p>
             <button
               onClick={() => setIsUploadModalOpen(true)}
               className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors"
@@ -135,37 +120,24 @@ function App() {
           </div>
         )}
 
-        {/* Clips Grid */}
         {!loading && clips.length > 0 && (
           <>
             <div className="mb-6">
-              <h2 className="text-xl font-semibold text-gray-800">
-                {clips.length} clip{clips.length !== 1 ? 's' : ''}
-              </h2>
+              <h2 className="text-xl font-semibold text-gray-800">{clips.length} clip{clips.length !== 1 ? 's' : ''}</h2>
             </div>
-            
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {clips.map((clip) => (
-                <ClipCard
-                  key={clip.id}
-                  clip={clip}
-                  onPlay={handlePlay}
-                  onDelete={handleDelete}
-                />
+                <ClipCard key={clip.id} clip={clip} onPlay={handlePlay} onDelete={handleDelete} />
               ))}
             </div>
           </>
         )}
       </main>
 
-      {/* Upload Modal */}
-      <UploadModal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        onUploadSuccess={handleUploadSuccess}
-      />
+      <UploadModal isOpen={isUploadModalOpen} onClose={() => setIsUploadModalOpen(false)} onUploadSuccess={handleUploadSuccess} />
     </div>
   );
-}
+};
 
 export default App;
