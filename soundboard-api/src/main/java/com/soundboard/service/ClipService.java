@@ -61,20 +61,28 @@ public class ClipService {
                     clip.setDescription(updatedClip.getDescription());
                     clip.setAudioFileUrl(updatedClip.getAudioFileUrl());
                     clip.setThumbnailUrl(updatedClip.getThumbnailUrl());
-                    clip.setDurationSeconds(updatedClip.getDurationSeconds());
                     clip.setIsProcessed(updatedClip.getIsProcessed());
                     return clipRepository.save(clip);
                 });
     }
     
     private ClipDTO convertToDTO(Clip clip) {
+        // Convert file path to URL path for frontend
+        String audioUrl = null;
+        if (clip.getAudioFileUrl() != null) {
+            // Extract filename from path
+            String fileName = clip.getAudioFileUrl().substring(
+                clip.getAudioFileUrl().lastIndexOf('/') + 1
+            );
+            audioUrl = "/api/files/audio/" + fileName;
+        }
+        
         return new ClipDTO(
             clip.getId(),
             clip.getTitle(),
             clip.getDescription(),
-            clip.getAudioFileUrl(),
+            audioUrl,
             clip.getThumbnailUrl(),
-            clip.getDurationSeconds(),
             clip.getFileSizeBytes(),
             clip.getUploadedBy(),
             clip.getUploadDate(),

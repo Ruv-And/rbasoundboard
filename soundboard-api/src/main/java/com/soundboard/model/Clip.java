@@ -33,9 +33,6 @@ public class Clip {
     @Column(name = "thumbnail_url", length = 500)
     private String thumbnailUrl;
     
-    @Column(name = "duration_seconds", precision = 10, scale = 2)
-    private BigDecimal durationSeconds;
-    
     @Column(name = "file_size_bytes")
     private Long fileSizeBytes;
     

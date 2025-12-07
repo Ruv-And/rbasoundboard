@@ -43,11 +43,11 @@ WORKDIR /build
 COPY --from=proto-builder /build/generated/java /build/src/main/java
 
 # Copy pom.xml and download dependencies
-COPY pom.xml .
+COPY soundboard-api/pom.xml .
 RUN mvn dependency:go-offline -B
 
 # Copy application source
-COPY src ./src
+COPY soundboard-api/src ./src
 
 # Build the application
 RUN mvn clean package -DskipTests

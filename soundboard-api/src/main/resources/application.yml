@@ -1,13 +1,13 @@
 spring:
   application:
     name: soundboard-api
-  
+
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:5432/soundboard
     username: ${DB_USER:devuser}
     password: ${DB_PASSWORD:devpass123}
     driver-class-name: org.postgresql.Driver
-  
+
   jpa:
     hibernate:
       ddl-auto: none
@@ -18,12 +18,12 @@ spring:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
-  
+
   flyway:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
-  
+
   servlet:
     multipart:
       max-file-size: 100MB
@@ -34,9 +34,9 @@ server:
 
 # Storage configuration
 storage:
-  upload-dir: ${UPLOAD_DIR:./uploads}
-  audio-dir: ${AUDIO_DIR:./audio}
-  thumbnail-dir: ${THUMBNAIL_DIR:./thumbnails}
+  upload-dir: ${UPLOAD_DIR:/app/uploads}
+  audio-dir: ${AUDIO_DIR:/app/audio}
+  thumbnail-dir: ${THUMBNAIL_DIR:/app/thumbnails}
 
 # gRPC configuration
 grpc:

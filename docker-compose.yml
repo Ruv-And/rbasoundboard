@@ -33,6 +33,8 @@ services:
     ports:
       - "50051:50051"
     volumes:
+      - ./uploads:/app/uploads
+      - ./audio:/app/audio
       - ./temp_audio:/tmp/audio
     networks:
       - soundboard-network

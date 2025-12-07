@@ -3,6 +3,7 @@ package com.soundboard.controller;
 import com.soundboard.dto.ClipDTO;
 import com.soundboard.dto.UploadResponse;
 import com.soundboard.model.Clip;
+import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.StorageService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class ClipController {
     
     private final ClipService clipService;
     private final StorageService storageService;
+    private final AudioProcessorService audioProcessorService;
     
     @GetMapping
     public ResponseEntity<Page<ClipDTO>> getAllClips(
@@ -65,25 +67,59 @@ public class ClipController {
         
         try {
             // Save uploaded file
-            String filePath = storageService.saveUpload(file);
+            String uploadedFilePath = storageService.saveUpload(file);
+            
+            // Determine if this is a video file that needs audio extraction
+            String originalFilename = file.getOriginalFilename();
+            boolean isVideo = isVideoFile(originalFilename);
             
             // Create clip entity
             Clip clip = new Clip();
             clip.setTitle(title);
             clip.setDescription(description);
-            clip.setOriginalFileUrl(filePath);
+            clip.setOriginalFileUrl(uploadedFilePath);
             clip.setUploadedBy(uploadedBy);
             clip.setFileSizeBytes(file.getSize());
-            clip.setIsProcessed(false);
+            clip.setIsProcessed(false); // Will be set to true after processing
             
             Clip savedClip = clipService.createClip(clip);
             
-            // TODO: Trigger audio processing via gRPC
+            // Process audio in background (for now, synchronously)
+            String audioFilePath;
+            if (isVideo) {
+                log.info("Video file detected, extracting audio via gRPC");
+                try {
+                    // Extract audio as MP3 at 192kbps
+                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
+                    
+                    // Update clip with processed audio
+                    savedClip.setAudioFileUrl(audioFilePath);
+                    savedClip.setIsProcessed(true);
+                    clipService.updateClip(savedClip.getId(), savedClip);
+                    
+                    log.info("Audio extraction completed: {}", audioFilePath);
+                } catch (Exception e) {
+                    log.error("Failed to process audio", e);
+                    // Keep clip as unprocessed, user can retry later
+                    return ResponseEntity.status(HttpStatus.CREATED).body(new UploadResponse(
+                        savedClip.getId(),
+                        "error",
+                        "File uploaded but audio processing failed: " + e.getMessage(),
+                        null
+                    ));
+                }
+            } else {
+                // Audio file - use as-is
+                log.info("Audio file detected, using original file");
+                savedClip.setAudioFileUrl(uploadedFilePath);
+                savedClip.setIsProcessed(true);
+                clipService.updateClip(savedClip.getId(), savedClip);
+            }
             
             UploadResponse response = new UploadResponse(
                 savedClip.getId(),
-                "pending",
-                "File uploaded successfully, processing audio...",
+                "success",
+                "File uploaded and processed successfully",
                 null
             );
             
@@ -111,5 +147,16 @@ public class ClipController {
     @GetMapping("/health")
     public ResponseEntity<String> health() {
         return ResponseEntity.ok("API is running!");
+    }
+    
+    private boolean isVideoFile(String filename) {
+        if (filename == null) return false;
+        String lowerFilename = filename.toLowerCase();
+        return lowerFilename.endsWith(".mp4") ||
+               lowerFilename.endsWith(".avi") ||
+               lowerFilename.endsWith(".mov") ||
+               lowerFilename.endsWith(".webm") ||
+               lowerFilename.endsWith(".mkv") ||
+               lowerFilename.endsWith(".flv");
     }
 }

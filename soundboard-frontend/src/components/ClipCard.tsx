@@ -7,11 +7,6 @@ interface ClipCardProps {
 }
 
 const ClipCard: React.FC<ClipCardProps> = ({ clip, onPlay, onDelete }) => {
-  const formatDuration = (seconds: any) => {
-    if (!seconds) return "N/A";
-    return `${parseFloat(seconds).toFixed(1)}s`;
-  };
-
   return (
     <div className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300">
       <div className="aspect-video bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center relative">
@@ -43,8 +38,7 @@ const ClipCard: React.FC<ClipCardProps> = ({ clip, onPlay, onDelete }) => {
           </p>
         )}
 
-        <div className="flex items-center justify-between text-sm text-gray-500 mb-3">
-          <span>{formatDuration(clip.durationSeconds)}</span>
+        <div className="flex items-center justify-end text-sm text-gray-500 mb-3">
           <span>by {clip.uploadedBy || "anonymous"}</span>
         </div>
 

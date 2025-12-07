@@ -4,9 +4,14 @@ const API_BASE_URL: string = (import.meta.env.VITE_API_URL as string) || 'http:/
 
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+});
+
+// Add a request interceptor to set Content-Type for non-FormData requests
+api.interceptors.request.use((config) => {
+  if (!(config.data instanceof FormData)) {
+    config.headers['Content-Type'] = 'application/json';
+  }
+  return config;
 });
 
 export const clipService = {
@@ -32,7 +37,7 @@ export const clipService = {
     formData.append('description', description);
     formData.append('uploadedBy', uploadedBy);
 
-    const response = await api.post('/clips/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    const response = await api.post('/clips/upload', formData);
     return response.data;
   },
 
