@@ -18,12 +18,13 @@ RUN apt-get update && apt-get install -y \
     # Protobuf dev
     libprotobuf-dev \
     protobuf-compiler \
-    # FFmpeg dev libs (optional for linking)
+    # FFmpeg dev libs with rubberband support
     ffmpeg \
     libavcodec-dev \
     libavformat-dev \
     libavutil-dev \
     libswresample-dev \
+    librubberband-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install Absei (dependency of protobuf)
@@ -77,6 +78,7 @@ RUN apt-get update && apt-get install -y \
     libstdc++6 \
     libgcc-s1 \
     ffmpeg \
+    librubberband2 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

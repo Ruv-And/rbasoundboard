@@ -1,5 +1,4 @@
-﻿-- Create clips table
-CREATE TABLE clips (
+﻿CREATE TABLE clips (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -14,7 +13,6 @@ CREATE TABLE clips (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create indexes
 CREATE INDEX idx_clips_upload_date ON clips(upload_date DESC);
 CREATE INDEX idx_clips_uploaded_by ON clips(uploaded_by);
 CREATE INDEX idx_clips_is_processed ON clips(is_processed);

@@ -1,6 +1,6 @@
 # RBA Soundboard app
 
-A web soundboard application that allows users to upload video/audio clips of funny moments, add titles and thumbnails, and play them back with audio effects (speed up/down, pitch shift, filters). Built as a distributed microservices system.
+A web soundboard application that allows users to upload video/audio clips of funny moments, add titles and thumbnails, and play them back with real time audio effects (speed and pitch modifications). Built as a distributed microservices system. React frontend, Java Spring Boot API with PostgreSQL, C++ audio processing service using FFmpeg and Rubberband with gRPC for high-performance audio manipulation, and Apache Kafka for asynchronous activity tracking.
 
 
 ## Start everything
@@ -16,6 +16,7 @@ docker-compose up -d --build
 docker-compose logs -f api
 docker-compose logs -f audio-processor
 docker-compose logs -f frontend
+docker-compose logs -f postgres
 
 ## Restart a specific service
 docker-compose restart api

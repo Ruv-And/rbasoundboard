@@ -97,12 +97,89 @@ grpc::Status AudioProcessorServiceImpl::ApplyEffects(
     std::cout << "ApplyEffects called:" << std::endl;
     std::cout << "  Audio: " << request->audio_path() << std::endl;
     std::cout << "  Speed: " << request->speed_factor() << "x" << std::endl;
-    std::cout << "  Pitch: " << request->pitch_semitones() << " semitones" << std::endl;
+    std::cout << "  Pitch: " << request->pitch_factor() << "x" << std::endl;
     
-    // Mock response
+    float speed = request->speed_factor();
+    float pitch = request->pitch_factor();
+    
+    // Clamp values to safe range
+    if (speed < 0.5f) speed = 0.5f;
+    if (speed > 2.0f) speed = 2.0f;
+    if (pitch < 0.5f) pitch = 0.5f;
+    if (pitch > 2.0f) pitch = 2.0f;
+    
+    // Build FFmpeg filter chain
+    std::string filter;
+    
+    if (speed != 1.0f && pitch != 1.0f) {
+        // Both speed and pitch - use rubberband for pitch, atempo for speed
+        char buf[256];
+        snprintf(buf, sizeof(buf), "atempo=%.2f,rubberband=pitch=%.2f", speed, pitch);
+        filter = buf;
+    } else if (speed != 1.0f) {
+        // Speed only - use atempo which preserves pitch
+        char buf[64];
+        snprintf(buf, sizeof(buf), "atempo=%.2f", speed);
+        filter = buf;
+    } else if (pitch != 1.0f) {
+        // Pitch only - use rubberband for independent pitch shifting
+        char buf[128];
+        snprintf(buf, sizeof(buf), "rubberband=pitch=%.2f", pitch);
+        filter = buf;
+    } else {
+        // No modifications - just copy
+        std::string copy_cmd = "cp \"" + request->audio_path() + "\" \"" + request->output_path() + "\"";
+        int result = system(copy_cmd.c_str());
+        
+        response->set_success(result == 0);
+        response->set_processed_audio_path(request->output_path());
+        response->set_error_message(result == 0 ? "" : "Failed to copy file");
+        return grpc::Status::OK;
+    }
+    
+    // Build FFmpeg command
+    std::string ffmpeg_cmd = "ffmpeg -i \"" + request->audio_path() + "\" ";
+    ffmpeg_cmd += "-af \"" + filter + "\" ";
+    ffmpeg_cmd += "-acodec libmp3lame ";
+    ffmpeg_cmd += "-ab 192k ";
+    ffmpeg_cmd += "-ar 44100 ";
+    ffmpeg_cmd += "-y ";
+    ffmpeg_cmd += "\"" + request->output_path() + "\" ";
+    ffmpeg_cmd += "2>&1";
+    
+    std::cout << "  Command: " << ffmpeg_cmd << std::endl;
+    
+    // Execute FFmpeg
+    FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
+    if (!pipe) {
+        std::cerr << "  ERROR: Failed to run FFmpeg" << std::endl;
+        response->set_success(false);
+        response->set_error_message("Failed to execute FFmpeg command");
+        return grpc::Status::OK;
+    }
+    
+    // Read output
+    char buffer[256];
+    std::string ffmpeg_output;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        ffmpeg_output += buffer;
+    }
+    
+    int exit_code = pclose(pipe);
+    
+    if (exit_code != 0) {
+        std::cerr << "  ERROR: FFmpeg failed with exit code " << exit_code << std::endl;
+        std::cerr << "  FFmpeg output: " << ffmpeg_output << std::endl;
+        response->set_success(false);
+        response->set_error_message("FFmpeg processing failed");
+        return grpc::Status::OK;
+    }
+    
     response->set_success(true);
     response->set_processed_audio_path(request->output_path());
     response->set_error_message("");
+    
+    std::cout << "  Result: SUCCESS" << std::endl;
     
     return grpc::Status::OK;
 }

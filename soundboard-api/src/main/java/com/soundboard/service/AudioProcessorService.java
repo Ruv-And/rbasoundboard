@@ -107,4 +107,43 @@ public class AudioProcessorService {
 
         return blockingStub.getAudioInfo(request);
     }
+    
+    /**
+     * Apply speed and pitch effects to audio file
+     * 
+     * @param audioPath Path to the input audio file
+     * @param outputPath Path where processed audio will be saved
+     * @param speedFactor Speed multiplier (0.5 to 2.0, 1.0 = normal)
+     * @param pitchFactor Pitch multiplier (0.5 to 2.0, 1.0 = normal)
+     * @return Path to the processed audio file
+     * @throws Exception if processing fails
+     */
+    public String applyEffects(String audioPath, String outputPath, float speedFactor, float pitchFactor) throws Exception {
+        log.info("Applying effects: speed={}, pitch={} to {}", speedFactor, pitchFactor, audioPath);
+        
+        AudioProcessorOuterClass.ApplyEffectsRequest request = AudioProcessorOuterClass.ApplyEffectsRequest.newBuilder()
+                .setAudioPath(audioPath)
+                .setOutputPath(outputPath)
+                .setSpeedFactor(speedFactor)
+                .setPitchFactor(pitchFactor)
+                .build();
+        
+        AudioProcessorOuterClass.ApplyEffectsResponse response;
+        try {
+            response = blockingStub.applyEffects(request);
+        } catch (Exception e) {
+            log.error("gRPC call to applyEffects failed", e);
+            throw new Exception("Failed to communicate with audio processor: " + e.getMessage(), e);
+        }
+        
+        if (!response.getSuccess()) {
+            String errorMsg = response.getErrorMessage();
+            log.error("Effect application failed: {}", errorMsg);
+            throw new Exception("Effect application failed: " + errorMsg);
+        }
+        
+        log.info("Effects applied successfully: {}", response.getProcessedAudioPath());
+        return response.getProcessedAudioPath();
+    }
 }
+

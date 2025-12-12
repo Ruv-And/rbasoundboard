@@ -50,7 +50,7 @@ message ApplyEffectsRequest {
   string audio_path = 1;
   string output_path = 2;
   float speed_factor = 3;         // 0.5 to 2.0 (1.0 = normal)
-  float pitch_semitones = 4;      // -12 to +12 (0 = normal)
+  float pitch_factor = 4;         // 0.5 to 2.0 (1.0 = normal)
 }
 
 // Response after applying effects
