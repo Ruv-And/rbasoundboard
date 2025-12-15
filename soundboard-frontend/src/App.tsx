@@ -3,7 +3,6 @@ import { clipService } from "./services/api";
 import ClipCard from "./components/ClipCard";
 import UploadModal from "./components/UploadModal";
 import ColorBends from "./components/ColorBends";
-import PrismaticBurst from "./components/Burst";
 const App: React.FC = () => {
   const [clips, setClips] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -12,15 +11,18 @@ const App: React.FC = () => {
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(
     null
   );
+  const [sortBy, setSortBy] = useState<"recent" | "popular">("popular");
 
   useEffect(() => {
     loadClips();
-  }, []);
+  }, [sortBy]);
 
   const loadClips = async () => {
     try {
       setLoading(true);
-      const data = await clipService.getClips();
+      const data = sortBy === "popular" 
+        ? await clipService.getPopularClips()
+        : await clipService.getClips();
       setClips(data.content || []);
       setError(null);
     } catch (err) {
@@ -85,18 +87,6 @@ const App: React.FC = () => {
           parallax={1}
           noise={0.3}
         />
-        {/* <PrismaticBurst
-          animationType="rotate3d"
-          intensity={2}
-          speed={0.5}
-          distort={0}
-          paused={false}
-          offset={{ x: 0, y: 0 }}
-          hoverDampness={0}
-          rayCount={0}
-          mixBlendMode="lighten"
-          colors={["#49C867", "#34A853", "#13B1EC"]}
-        /> */}
       </div>
 
       {/* Content overlay */}
@@ -111,7 +101,7 @@ const App: React.FC = () => {
 
         <header className="bg-gray-900/80 backdrop-blur-md shadow-sm sticky top-0 z-40 border-b border-gray-700">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center mb-4">
               <div>
                 <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] bg-clip-text text-transparent">
                   RBA Soundboard
@@ -123,6 +113,30 @@ const App: React.FC = () => {
                 className="px-4 sm:px-6 py-2 sm:py-3 bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] hover:from-[#49C867] hover:via-[#34A853] hover:to-[#13B1EC] text-white rounded-full font-medium transition-all shadow-lg hover:shadow-xl text-sm sm:text-base"
               >
                 + Upload
+              </button>
+            </div>
+
+            {/* Sort controls */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSortBy("popular")}
+                className={`px-4 py-2 rounded-full font-medium transition-all text-sm ${
+                  sortBy === "popular"
+                    ? "bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] text-white shadow-lg"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                Popular
+              </button>
+              <button
+                onClick={() => setSortBy("recent")}
+                className={`px-4 py-2 rounded-full font-medium transition-all text-sm ${
+                  sortBy === "recent"
+                    ? "bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] text-white shadow-lg"
+                    : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                }`}
+              >
+                Recent
               </button>
             </div>
           </div>

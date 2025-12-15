@@ -24,7 +24,7 @@ public class Clip {
     @Column(columnDefinition = "TEXT")
     private String description;
     
-    @Column(name = "original_file_url", nullable = false, length = 500)
+    @Column(name = "original_file_url", length = 500)
     private String originalFileUrl;
     
     @Column(name = "audio_file_url", length = 500)

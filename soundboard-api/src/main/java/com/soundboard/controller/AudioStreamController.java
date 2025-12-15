@@ -4,6 +4,8 @@ import com.soundboard.event.PlayEvent;
 import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.PlayEventProducer;
+import com.soundboard.service.AudioStreamSession;
+import com.soundboard.service.ProcessorBusyException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,12 +14,12 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/stream")
@@ -39,7 +41,7 @@ public class AudioStreamController {
      * Pitch: 0.5 = half pitch (lower), 1.0 = normal, 2.0 = double pitch (higher)
      */
     @GetMapping("/{id}")
-    public ResponseEntity<InputStreamResource> streamAudio(
+    public ResponseEntity<StreamingResponseBody> streamAudio(
             @PathVariable Long id,
             @RequestParam(defaultValue = "1.0") double speed,
             @RequestParam(defaultValue = "1.0") double pitch) throws IOException {
@@ -72,35 +74,63 @@ public class AudioStreamController {
         // If no modifications, serve file directly
         if (speed == 1.0 && pitch == 1.0) {
             log.info("Serving original file: {}", audioFilePath);
-            InputStream fileStream = Files.newInputStream(Paths.get(audioFilePath));
+            StreamingResponseBody responseBody = outputStream -> {
+                try (InputStream fileStream = Files.newInputStream(Paths.get(audioFilePath))) {
+                    byte[] buffer = new byte[4096];
+                    int bytesRead;
+                    while ((bytesRead = fileStream.read(buffer)) != -1) {
+                        outputStream.write(buffer, 0, bytesRead);
+                    }
+                    outputStream.flush();
+                }
+            };
+            
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("audio/mpeg"))
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
                     .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
-                    .body(new InputStreamResource(fileStream));
+                    .body(responseBody);
         }
 
-        // Apply effects via gRPC to C++ service
+        // Apply effects via gRPC to C++ service with streaming (no disk writes)
         try {
-            // Use temp filename in shared audio directory
-            String outputPath = audioDir + "/temp_" + UUID.randomUUID() + ".mp3";
-            log.info("Applying effects: speed={}, pitch={}, output={}", speed, pitch, outputPath);
+            log.info("Applying effects with streaming: speed={}, pitch={}", speed, pitch);
+            // Probe to surface RESOURCE_EXHAUSTED before committing headers
+            AudioStreamSession session = audioProcessorService.beginApplyEffectsStream(audioFilePath, (float) speed, (float) pitch);
 
-            String processedPath = audioProcessorService.applyEffects(
-                    audioFilePath, outputPath, (float) speed, (float) pitch);
-
-            log.info("Effects applied successfully, serving: {}", processedPath);
-
-            InputStream fileStream = Files.newInputStream(Paths.get(processedPath));
+            StreamingResponseBody responseBody = outputStream -> {
+                try {
+                    // Write first chunk if present
+                    byte[] first = session.getFirstChunk();
+                    if (first != null && first.length > 0) {
+                        outputStream.write(first);
+                    }
+                    // Stream remaining chunks
+                    var it = session.getIterator();
+                    while (it.hasNext()) {
+                        var chunk = it.next();
+                        outputStream.write(chunk.getData().toByteArray());
+                    }
+                    outputStream.flush();
+                } catch (Exception e) {
+                    log.error("Failed to stream processed audio for clip {}", id, e);
+                    throw new IOException("Failed to process audio: " + e.getMessage(), e);
+                }
+            };
 
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("audio/mpeg"))
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
                     .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
-                    .body(new InputStreamResource(fileStream));
+                    .body(responseBody);
 
+        } catch (ProcessorBusyException busy) {
+            log.warn("Audio processor busy for clip {}: {}", id, busy.getMessage());
+            return ResponseEntity.status(429)
+                    .header("Retry-After", "2")
+                    .build();
         } catch (Exception e) {
-            log.error("Failed to apply audio effects for clip {}", id, e);
+            log.error("Failed to stream processed audio for clip {}", id, e);
             return ResponseEntity.internalServerError().build();
         }
     }

@@ -23,6 +23,7 @@ public class ClipService {
 
     private final ClipRepository clipRepository;
     private final PlayStatsService playStatsService;
+    private final StorageService storageService;
 
     @Transactional(readOnly = true)
     public Page<ClipDTO> getAllClips(Pageable pageable) {
@@ -82,7 +83,38 @@ public class ClipService {
     @Transactional
     public void deleteClip(Long id) {
         log.info("Deleting clip with id: {}", id);
+        
+        // Find clip and delete associated files
+        Optional<Clip> clip = clipRepository.findById(id);
+        if (clip.isPresent()) {
+            Clip clipToDelete = clip.get();
+            
+            // Delete audio file if it exists
+            if (clipToDelete.getAudioFileUrl() != null && !clipToDelete.getAudioFileUrl().isEmpty()) {
+                try {
+                    storageService.deleteFile(clipToDelete.getAudioFileUrl());
+                    log.info("Deleted audio file: {}", clipToDelete.getAudioFileUrl());
+                } catch (Exception e) {
+                    log.warn("Failed to delete audio file: {}", clipToDelete.getAudioFileUrl(), e);
+                    // Continue with clip deletion even if file deletion fails
+                }
+            }
+            
+            // Delete thumbnail if it exists
+            if (clipToDelete.getThumbnailUrl() != null && !clipToDelete.getThumbnailUrl().isEmpty()) {
+                try {
+                    storageService.deleteFile(clipToDelete.getThumbnailUrl());
+                    log.info("Deleted thumbnail file: {}", clipToDelete.getThumbnailUrl());
+                } catch (Exception e) {
+                    log.warn("Failed to delete thumbnail file: {}", clipToDelete.getThumbnailUrl(), e);
+                    // Continue with clip deletion even if file deletion fails
+                }
+            }
+        }
+        
+        // Delete clip from database
         clipRepository.deleteById(id);
+        log.info("Deleted clip record from database");
     }
 
     @Transactional

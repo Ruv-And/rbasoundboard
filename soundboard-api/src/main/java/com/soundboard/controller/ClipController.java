@@ -6,6 +6,7 @@ import com.soundboard.model.Clip;
 import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.StorageService;
+import com.soundboard.service.PlayStatsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -77,9 +78,6 @@ public class ClipController {
         log.info("POST /api/clips/upload - title: {}, file: {}", title, file.getOriginalFilename());
 
         try {
-            // Save uploaded file
-            String uploadedFilePath = storageService.saveUpload(file);
-
             // Determine if this is a video file that needs audio extraction
             String originalFilename = file.getOriginalFilename();
             boolean isVideo = isVideoFile(originalFilename);
@@ -88,19 +86,21 @@ public class ClipController {
             Clip clip = new Clip();
             clip.setTitle(title);
             clip.setDescription(description);
-            clip.setOriginalFileUrl(uploadedFilePath);
             clip.setUploadedBy(uploadedBy);
             clip.setFileSizeBytes(file.getSize());
             clip.setIsProcessed(false); // Will be set to true after processing
 
             Clip savedClip = clipService.createClip(clip);
 
-            // Process audio in background (for now, synchronously)
+            // Process audio and save to audio directory (always MP3)
             String audioFilePath;
             if (isVideo) {
                 log.info("Video file detected, extracting audio via gRPC");
                 try {
-                    // Extract audio as MP3 at 192kbps
+                    // Save video temporarily to uploads directory
+                    String uploadedFilePath = storageService.saveUpload(file);
+                    
+                    // Extract audio as MP3 to audio directory
                     audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
 
                     // Delete original video file to save storage
@@ -123,11 +123,32 @@ public class ClipController {
                             null));
                 }
             } else {
-                // Audio file - use as-is
-                log.info("Audio file detected, using original file");
-                savedClip.setAudioFileUrl(uploadedFilePath);
-                savedClip.setIsProcessed(true);
-                clipService.updateClip(savedClip.getId(), savedClip);
+                // Audio file - transcode to MP3 in audio directory
+                log.info("Audio file detected, transcoding to MP3 via gRPC");
+                try {
+                    // Save original audio temporarily to uploads directory
+                    String uploadedFilePath = storageService.saveUpload(file);
+
+                    // Convert to MP3 using the same extractAudio call (works for audio inputs too)
+                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
+
+                    // Delete original uploaded audio to save space
+                    storageService.deleteFile(uploadedFilePath);
+                    log.info("Deleted original audio file: {}", uploadedFilePath);
+
+                    savedClip.setAudioFileUrl(audioFilePath);
+                    savedClip.setIsProcessed(true);
+                    clipService.updateClip(savedClip.getId(), savedClip);
+
+                    log.info("Audio transcoding completed: {}", audioFilePath);
+                } catch (Exception e) {
+                    log.error("Failed to transcode audio", e);
+                    return ResponseEntity.status(HttpStatus.CREATED).body(new UploadResponse(
+                            savedClip.getId(),
+                            "error",
+                            "File uploaded but audio processing failed: " + e.getMessage(),
+                            null));
+                }
             }
 
             UploadResponse response = new UploadResponse(
@@ -138,6 +159,14 @@ public class ClipController {
 
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
 
+        } catch (org.hibernate.exception.ConstraintViolationException e) {
+            log.error("Database constraint violation during upload", e);
+            UploadResponse response = new UploadResponse(
+                    null,
+                    "error",
+                    "Invalid file data. Please ensure the file has proper metadata.",
+                    null);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
         } catch (Exception e) {
             log.error("Error uploading file", e);
             UploadResponse response = new UploadResponse(

@@ -2,12 +2,32 @@
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
+#include <chrono>
+#include <algorithm>
+#include <memory>
+
+using namespace std::chrono_literals;
+
+AudioProcessorServiceImpl::AudioProcessorServiceImpl(int maxConcurrency)
+        : concurrencySem(std::clamp(maxConcurrency, 1, 1024)),
+            maxConcurrency_{std::clamp(maxConcurrency, 1, 1024)} {}
 
 grpc::Status AudioProcessorServiceImpl::ExtractAudio(
     grpc::ServerContext* context,
     const soundboard::ExtractAudioRequest* request,
     soundboard::ExtractAudioResponse* response) {
-    
+    // Try to acquire a concurrency permit with a short timeout
+    if (!concurrencySem.try_acquire_for(100ms)) {
+        std::cerr << "  BUSY: Concurrency limit reached for ExtractAudio" << std::endl;
+        response->set_success(false);
+        response->set_error_message("Processor busy, please retry");
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "Processor busy");
+    }
+    auto release_guard = std::unique_ptr<void, void(*)(void*)>{
+        reinterpret_cast<void*>(1),
+        [this](void*) { this->concurrencySem.release(); }
+    };
+
     std::cout << "ExtractAudio called:" << std::endl;
     std::cout << "  Video: " << request->video_path() << std::endl;
     std::cout << "  Output: " << request->output_path() << std::endl;
@@ -89,12 +109,21 @@ grpc::Status AudioProcessorServiceImpl::GetAudioInfo(
     return grpc::Status::OK;
 }
 
-grpc::Status AudioProcessorServiceImpl::ApplyEffects(
+grpc::Status AudioProcessorServiceImpl::ApplyEffectsStream(
     grpc::ServerContext* context,
     const soundboard::ApplyEffectsRequest* request,
-    soundboard::ApplyEffectsResponse* response) {
-    
-    std::cout << "ApplyEffects called:" << std::endl;
+    grpc::ServerWriter<soundboard::AudioChunk>* writer) {
+    // Try to acquire a concurrency permit with a short timeout
+    if (!concurrencySem.try_acquire_for(100ms)) {
+        std::cerr << "  BUSY: Concurrency limit reached for ApplyEffectsStream" << std::endl;
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "Processor busy");
+    }
+    auto release_guard = std::unique_ptr<void, void(*)(void*)>{
+        reinterpret_cast<void*>(1),
+        [this](void*) { this->concurrencySem.release(); }
+    };
+
+    std::cout << "ApplyEffectsStream called:" << std::endl;
     std::cout << "  Audio: " << request->audio_path() << std::endl;
     std::cout << "  Speed: " << request->speed_factor() << "x" << std::endl;
     std::cout << "  Pitch: " << request->pitch_factor() << "x" << std::endl;
@@ -127,59 +156,74 @@ grpc::Status AudioProcessorServiceImpl::ApplyEffects(
         snprintf(buf, sizeof(buf), "rubberband=pitch=%.2f", pitch);
         filter = buf;
     } else {
-        // No modifications - just copy
-        std::string copy_cmd = "cp \"" + request->audio_path() + "\" \"" + request->output_path() + "\"";
-        int result = system(copy_cmd.c_str());
+        // No modifications - stream original file
+        std::ifstream file(request->audio_path(), std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "  ERROR: Failed to open input file" << std::endl;
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "Input file not found");
+        }
         
-        response->set_success(result == 0);
-        response->set_processed_audio_path(request->output_path());
-        response->set_error_message(result == 0 ? "" : "Failed to copy file");
+        char buffer[65536];
+        int32_t sequence = 0;
+        while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+            soundboard::AudioChunk chunk;
+            chunk.set_data(buffer, file.gcount());
+            chunk.set_sequence_number(sequence++);
+            
+            if (!writer->Write(chunk)) {
+                std::cerr << "  ERROR: Failed to write chunk " << sequence - 1 << std::endl;
+                return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to stream data");
+            }
+        }
+        
+        file.close();
+        std::cout << "  Result: SUCCESS (streamed " << sequence << " chunks)" << std::endl;
         return grpc::Status::OK;
     }
     
-    // Build FFmpeg command
+    // Build FFmpeg command to pipe output to stdout
     std::string ffmpeg_cmd = "ffmpeg -i \"" + request->audio_path() + "\" ";
     ffmpeg_cmd += "-af \"" + filter + "\" ";
     ffmpeg_cmd += "-acodec libmp3lame ";
     ffmpeg_cmd += "-ab 192k ";
     ffmpeg_cmd += "-ar 44100 ";
-    ffmpeg_cmd += "-y ";
-    ffmpeg_cmd += "\"" + request->output_path() + "\" ";
-    ffmpeg_cmd += "2>&1";
+    ffmpeg_cmd += "-f mp3 - ";  // Output to stdout
+    ffmpeg_cmd += "2>/dev/null";  // Suppress FFmpeg logs
     
-    std::cout << "  Command: " << ffmpeg_cmd << std::endl;
+    std::cout << "  Command: ffmpeg ... (piping to stdout)" << std::endl;
     
-    // Execute FFmpeg
+    // Execute FFmpeg with pipe
     FILE* pipe = popen(ffmpeg_cmd.c_str(), "r");
     if (!pipe) {
         std::cerr << "  ERROR: Failed to run FFmpeg" << std::endl;
-        response->set_success(false);
-        response->set_error_message("Failed to execute FFmpeg command");
-        return grpc::Status::OK;
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to execute FFmpeg");
     }
     
-    // Read output
-    char buffer[256];
-    std::string ffmpeg_output;
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        ffmpeg_output += buffer;
+    // Stream chunks from FFmpeg output
+    char buffer[65536];
+    int32_t sequence = 0;
+    size_t bytes_read;
+    
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), pipe)) > 0) {
+        soundboard::AudioChunk chunk;
+        chunk.set_data(buffer, bytes_read);
+        chunk.set_sequence_number(sequence++);
+        
+        if (!writer->Write(chunk)) {
+            std::cerr << "  ERROR: Failed to write chunk " << sequence - 1 << std::endl;
+            pclose(pipe);
+            return grpc::Status(grpc::StatusCode::INTERNAL, "Failed to stream data");
+        }
     }
     
     int exit_code = pclose(pipe);
     
     if (exit_code != 0) {
         std::cerr << "  ERROR: FFmpeg failed with exit code " << exit_code << std::endl;
-        std::cerr << "  FFmpeg output: " << ffmpeg_output << std::endl;
-        response->set_success(false);
-        response->set_error_message("FFmpeg processing failed");
-        return grpc::Status::OK;
+        return grpc::Status(grpc::StatusCode::INTERNAL, "FFmpeg processing failed");
     }
     
-    response->set_success(true);
-    response->set_processed_audio_path(request->output_path());
-    response->set_error_message("");
-    
-    std::cout << "  Result: SUCCESS" << std::endl;
+    std::cout << "  Result: SUCCESS (streamed " << sequence << " chunks)" << std::endl;
     
     return grpc::Status::OK;
 }

@@ -22,17 +22,18 @@ public class PlayEventProducer {
      */
     public void publishPlayEvent(PlayEvent event) {
         try {
+            log.info("Publishing play event for clip: {}", event.getClipId());
             Message<PlayEvent> message = MessageBuilder
                     .withPayload(event)
                     .setHeader(KafkaHeaders.TOPIC, TOPIC)
-                    .setHeader(KafkaHeaders.MESSAGE_KEY, String.valueOf(event.getClipId()))
+                    .setHeader(KafkaHeaders.KEY, String.valueOf(event.getClipId()))
                     .build();
 
             kafkaTemplate.send(message).whenComplete((result, ex) -> {
                 if (ex != null) {
-                    log.error("Failed to publish play event for clip {}: {}", event.getClipId(), ex.getMessage());
+                    log.error("Failed to publish play event for clip {}: {}", event.getClipId(), ex.getMessage(), ex);
                 } else {
-                    log.debug("Published play event for clip {} with partition offset: {}",
+                    log.info("Successfully published play event for clip {} with partition offset: {}",
                             event.getClipId(),
                             result.getRecordMetadata().offset());
                 }

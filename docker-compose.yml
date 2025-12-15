@@ -76,6 +76,8 @@ services:
     container_name: soundboard-audio-processor
     ports:
       - "50051:50051"
+    environment:
+      AUDIO_PROC_MAX_CONCURRENCY: "2"
     volumes:
       - ./uploads:/app/uploads
       - ./audio:/app/audio
