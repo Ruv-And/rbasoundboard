@@ -98,7 +98,6 @@ const App: React.FC = () => {
           scale={0.4}
           frequency={1}
           warpStrength={1}
-          mouseInfluence={0}
           parallax={1}
           noise={0.3}
         />
@@ -114,9 +113,9 @@ const App: React.FC = () => {
           />
         )}
 
-        <header className="bg-gray-900/80 backdrop-blur-md shadow-sm sticky top-0 z-40 border-b border-gray-700">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-            <div className="flex justify-between items-center mb-4">
+        <header className="bg-gray-900/80 backdrop-blur-md shadow-sm fixed top-0 left-0 right-0 z-40 border-b border-gray-700">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
+            <div className="flex justify-between items-center mb-0">
               <div>
                 <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] bg-clip-text text-transparent">
                   RBA Soundboard
@@ -157,7 +156,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pt-[120px]">
           {loading && (
             <div className="text-center py-12">
               <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400"></div>
@@ -208,7 +207,7 @@ const App: React.FC = () => {
 
           {!loading && clips.length > 0 && (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+              <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3">
                 {clips.map((clip) => (
                   <ClipCard
                     key={clip.id}
