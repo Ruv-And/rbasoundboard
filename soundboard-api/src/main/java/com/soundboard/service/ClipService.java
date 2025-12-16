@@ -77,7 +77,13 @@ public class ClipService {
     @Transactional
     public Clip createClip(Clip clip) {
         log.info("Creating new clip: {}", clip.getTitle());
-        return clipRepository.save(clip);
+        Clip savedClip = clipRepository.save(clip);
+        
+        // Initialize play stats with 0 plays so clip appears in Popular immediately
+        playStatsService.initializePlayStats(savedClip.getId());
+        log.debug("Initialized play stats for new clip: {}", savedClip.getId());
+        
+        return savedClip;
     }
 
     @Transactional

@@ -20,6 +20,26 @@ public class PlayStatsService {
     private final PlayStatsRepository playStatsRepository;
 
     /**
+     * Initialize play stats for a new clip with 0 plays
+     */
+    @Transactional
+    public void initializePlayStats(Long clipId) {
+        try {
+            Optional<PlayStats> existingStats = playStatsRepository.findByClipId(clipId);
+            if (existingStats.isEmpty()) {
+                PlayStats newStats = new PlayStats();
+                newStats.setClipId(clipId);
+                newStats.setPlayCount(0L);
+                newStats.setLastPlayed(null);
+                playStatsRepository.save(newStats);
+                log.debug("Initialized play stats for clip: {}", clipId);
+            }
+        } catch (Exception e) {
+            log.error("Error initializing play stats for clip {}: {}", clipId, e.getMessage(), e);
+        }
+    }
+
+    /**
      * Increment play count for a clip
      */
     @Transactional

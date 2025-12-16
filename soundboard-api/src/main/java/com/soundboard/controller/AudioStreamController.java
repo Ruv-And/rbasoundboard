@@ -4,7 +4,6 @@ import com.soundboard.event.PlayEvent;
 import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.PlayEventProducer;
-import com.soundboard.service.AudioStreamSession;
 import com.soundboard.service.ProcessorBusyException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -95,25 +94,13 @@ public class AudioStreamController {
         // Apply effects via gRPC to C++ service with streaming (no disk writes)
         try {
             log.info("Applying effects with streaming: speed={}, pitch={}", speed, pitch);
-            // Probe to surface RESOURCE_EXHAUSTED before committing headers
-            AudioStreamSession session = audioProcessorService.beginApplyEffectsStream(audioFilePath, (float) speed, (float) pitch);
-
+            
+            // Use direct stream method which handles async with proper waits
             StreamingResponseBody responseBody = outputStream -> {
                 try {
-                    // Write first chunk if present
-                    byte[] first = session.getFirstChunk();
-                    if (first != null && first.length > 0) {
-                        outputStream.write(first);
-                    }
-                    // Stream remaining chunks
-                    var it = session.getIterator();
-                    while (it.hasNext()) {
-                        var chunk = it.next();
-                        outputStream.write(chunk.getData().toByteArray());
-                    }
-                    outputStream.flush();
+                    audioProcessorService.applyEffectsStream(audioFilePath, (float) speed, (float) pitch, outputStream);
                 } catch (Exception e) {
-                    log.error("Failed to stream processed audio for clip {}", id, e);
+                    log.error("Failed to apply audio effects for clip {}", id, e);
                     throw new IOException("Failed to process audio: " + e.getMessage(), e);
                 }
             };
@@ -124,11 +111,6 @@ public class AudioStreamController {
                     .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
                     .body(responseBody);
 
-        } catch (ProcessorBusyException busy) {
-            log.warn("Audio processor busy for clip {}: {}", id, busy.getMessage());
-            return ResponseEntity.status(429)
-                    .header("Retry-After", "2")
-                    .build();
         } catch (Exception e) {
             log.error("Failed to stream processed audio for clip {}", id, e);
             return ResponseEntity.internalServerError().build();

@@ -32,7 +32,7 @@ private:
         AudioProcessorAsync* svc_;
         grpc::ServerCompletionQueue* cq_;
         grpc::ServerContext ctx_;
-        enum CallStatus { CREATE, PROCESS, FINISH };
+        enum CallStatus { CREATE, PROCESS, WRITING, FINISH };
         CallStatus status_;
     };
     

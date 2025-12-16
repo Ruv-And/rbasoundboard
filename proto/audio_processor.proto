@@ -52,7 +52,7 @@ message ApplyEffectsRequest {
   float pitch_factor = 3;         // 0.5 to 2.0 (1.0 = normal)
 }
 
-// Audio chunk for streaming
+// Audio chunk for streaming1
 message AudioChunk {
   bytes data = 1;
   int32 sequence_number = 2;

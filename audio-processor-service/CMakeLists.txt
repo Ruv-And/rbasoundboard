@@ -90,7 +90,7 @@ protobuf_generate(
 # Main executable
 add_executable(audio_server 
     src/main.cpp
-    src/audio_processor_service.cpp
+    src/audio_processor_service_async.cpp
 )
 
 # Link libraries with proper ordering - utf8_range must come after protobuf
