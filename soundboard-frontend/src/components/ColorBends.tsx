@@ -12,7 +12,6 @@ type ColorBendsProps = {
   scale?: number;
   frequency?: number;
   warpStrength?: number;
-  mouseInfluence?: number;
   parallax?: number;
   noise?: number;
 };
@@ -31,8 +30,6 @@ uniform int uTransparent;
 uniform float uScale;
 uniform float uFrequency;
 uniform float uWarpStrength;
-uniform vec2 uPointer; // in NDC [-1,1]
-uniform float uMouseInfluence;
 uniform float uParallax;
 uniform float uNoise;
 varying vec2 vUv;
@@ -40,14 +37,11 @@ varying vec2 vUv;
 void main() {
   float t = uTime * uSpeed;
   vec2 p = vUv * 2.0 - 1.0;
-  p += uPointer * uParallax * 0.1;
   vec2 rp = vec2(p.x * uRot.x - p.y * uRot.y, p.x * uRot.y + p.y * uRot.x);
   vec2 q = vec2(rp.x * (uCanvas.x / uCanvas.y), rp.y);
   q /= max(uScale, 0.0001);
   q /= 0.5 + 0.2 * dot(q, q);
   q += 0.2 * cos(t) - 7.56;
-  vec2 toward = (uPointer - rp);
-  q += toward * uMouseInfluence * 0.2;
 
     vec3 col = vec3(0.0);
     float a = 1.0;
@@ -122,7 +116,6 @@ export default function ColorBends({
   scale = 1,
   frequency = 1,
   warpStrength = 1,
-  mouseInfluence = 1,
   parallax = 0.5,
   noise = 0.1
 }: ColorBendsProps) {
@@ -133,9 +126,6 @@ export default function ColorBends({
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const rotationRef = useRef<number>(rotation);
   const autoRotateRef = useRef<number>(autoRotate);
-  const pointerTargetRef = useRef<THREE.Vector2>(new THREE.Vector2(0, 0));
-  const pointerCurrentRef = useRef<THREE.Vector2>(new THREE.Vector2(0, 0));
-  const pointerSmoothRef = useRef<number>(8);
 
   useEffect(() => {
     const container = containerRef.current!;
@@ -158,8 +148,6 @@ export default function ColorBends({
         uScale: { value: scale },
         uFrequency: { value: frequency },
         uWarpStrength: { value: warpStrength },
-        uPointer: { value: new THREE.Vector2(0, 0) },
-        uMouseInfluence: { value: mouseInfluence },
         uParallax: { value: parallax },
         uNoise: { value: noise }
       },
@@ -215,11 +203,6 @@ export default function ColorBends({
       const s = Math.sin(rad);
       (material.uniforms.uRot.value as THREE.Vector2).set(c, s);
 
-      const cur = pointerCurrentRef.current;
-      const tgt = pointerTargetRef.current;
-      const amt = Math.min(1, dt * pointerSmoothRef.current);
-      cur.lerp(tgt, amt);
-      (material.uniforms.uPointer.value as THREE.Vector2).copy(cur);
       renderer.render(scene, camera);
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -249,7 +232,6 @@ export default function ColorBends({
     material.uniforms.uScale.value = scale;
     material.uniforms.uFrequency.value = frequency;
     material.uniforms.uWarpStrength.value = warpStrength;
-    material.uniforms.uMouseInfluence.value = mouseInfluence;
     material.uniforms.uParallax.value = parallax;
     material.uniforms.uNoise.value = noise;
 
@@ -279,30 +261,11 @@ export default function ColorBends({
     scale,
     frequency,
     warpStrength,
-    mouseInfluence,
     parallax,
     noise,
     colors,
     transparent
   ]);
-
-  useEffect(() => {
-    const material = materialRef.current;
-    const container = containerRef.current;
-    if (!material || !container) return;
-
-    const handlePointerMove = (e: PointerEvent) => {
-      const rect = container.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / (rect.width || 1)) * 2 - 1;
-      const y = -(((e.clientY - rect.top) / (rect.height || 1)) * 2 - 1);
-      pointerTargetRef.current.set(x, y);
-    };
-
-    container.addEventListener('pointermove', handlePointerMove);
-    return () => {
-      container.removeEventListener('pointermove', handlePointerMove);
-    };
-  }, []);
 
   return <div ref={containerRef} className={`w-full h-full relative overflow-hidden ${className}`} style={style} />;
 }

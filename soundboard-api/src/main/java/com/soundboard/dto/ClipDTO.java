@@ -14,7 +14,6 @@ import java.time.LocalDateTime;
 public class ClipDTO {
     private Long id;
     private String title;
-    private String description;
     private String audioUrl;
     private String thumbnailUrl;
     private Long fileSizeBytes;

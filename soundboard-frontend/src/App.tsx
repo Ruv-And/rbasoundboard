@@ -2,12 +2,15 @@ import React, { useState, useEffect } from "react";
 import { clipService } from "./services/api";
 import ClipCard from "./components/ClipCard";
 import UploadModal from "./components/UploadModal";
+import ConfirmModal from "./components/ConfirmModal";
 import ColorBends from "./components/ColorBends";
 const App: React.FC = () => {
   const [clips, setClips] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
+  const [clipToDelete, setClipToDelete] = useState<string | number | null>(null);
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(
     null
   );
@@ -54,18 +57,30 @@ const App: React.FC = () => {
     console.log("Playing:", clip.title, "with speed:", speed, "pitch:", pitch);
   };
 
-  const handleDelete = async (id: string | number) => {
-    if (!window.confirm("Are you sure you want to delete this clip?")) {
-      return;
-    }
+  const handleDelete = (id: string | number) => {
+    setClipToDelete(id);
+    setIsConfirmModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!clipToDelete) return;
 
     try {
-      await clipService.deleteClip(id);
-      setClips(clips.filter((clip) => clip.id !== id));
+      await clipService.deleteClip(clipToDelete);
+      setClips(clips.filter((clip) => clip.id !== clipToDelete));
+      setIsConfirmModalOpen(false);
+      setClipToDelete(null);
     } catch (err) {
       console.error("Error deleting clip:", err);
       alert("Failed to delete clip");
+      setIsConfirmModalOpen(false);
+      setClipToDelete(null);
     }
+  };
+
+  const cancelDelete = () => {
+    setIsConfirmModalOpen(false);
+    setClipToDelete(null);
   };
 
   const handleUploadSuccess = () => {
@@ -184,7 +199,7 @@ const App: React.FC = () => {
               </p>
               <button
                 onClick={() => setIsUploadModalOpen(true)}
-                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white rounded-xl font-medium transition-all shadow-lg"
+                className="px-6 py-3 bg-gradient-to-r from-[#49C867] via-[#34A853] to-[#13B1EC] hover:from-[#49C867] hover:via-[#34A853] hover:to-[#13B1EC] text-white rounded-full font-medium transition-all shadow-lg"
               >
                 Upload Your First Clip
               </button>
@@ -211,6 +226,16 @@ const App: React.FC = () => {
           isOpen={isUploadModalOpen}
           onClose={() => setIsUploadModalOpen(false)}
           onUploadSuccess={handleUploadSuccess}
+        />
+
+        <ConfirmModal
+          isOpen={isConfirmModalOpen}
+          title="Delete Clip"
+          message="Are you sure you want to delete this clip? This action cannot be undone."
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
+          confirmText="Delete"
+          cancelText="Cancel"
         />
       </div>
     </div>

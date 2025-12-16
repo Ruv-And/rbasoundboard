@@ -72,81 +72,90 @@ public class ClipController {
     public ResponseEntity<UploadResponse> uploadClip(
             @RequestParam("file") MultipartFile file,
             @RequestParam("title") String title,
-            @RequestParam(value = "description", required = false) String description,
             @RequestParam(value = "uploadedBy", defaultValue = "anonymous") String uploadedBy) {
 
         log.info("POST /api/clips/upload - title: {}, file: {}", title, file.getOriginalFilename());
 
         try {
-            // Determine if this is a video file that needs audio extraction
+            // Determine file type
             String originalFilename = file.getOriginalFilename();
             boolean isVideo = isVideoFile(originalFilename);
+            boolean isMP3 = isMP3File(originalFilename);
 
             // Create clip entity
             Clip clip = new Clip();
             clip.setTitle(title);
-            clip.setDescription(description);
             clip.setUploadedBy(uploadedBy);
             clip.setFileSizeBytes(file.getSize());
-            clip.setIsProcessed(false); // Will be set to true after processing
+            clip.setIsProcessed(false);
 
             Clip savedClip = clipService.createClip(clip);
 
-            // Process audio and save to audio directory (always MP3)
+            // Process audio and save to audio directory
             String audioFilePath;
-            if (isVideo) {
-                log.info("Video file detected, extracting audio via gRPC");
+            if (isMP3) {
+                // MP3 files: save directly to audio directory, no processing needed
+                log.info("MP3 file detected, saving directly to audio directory");
                 try {
-                    // Save video temporarily to uploads directory
-                    String uploadedFilePath = storageService.saveUpload(file);
-                    
-                    // Extract audio as MP3 to audio directory
-                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
-
-                    // Delete original video file to save storage
-                    storageService.deleteFile(uploadedFilePath);
-                    log.info("Deleted original video file: {}", uploadedFilePath);
-
-                    // Update clip with processed audio
+                    audioFilePath = storageService.saveAudio(file);
                     savedClip.setAudioFileUrl(audioFilePath);
                     savedClip.setIsProcessed(true);
                     clipService.updateClip(savedClip.getId(), savedClip);
+                    log.info("MP3 file saved directly: {}", audioFilePath);
+                } catch (Exception e) {
+                    log.error("Failed to save MP3 file", e);
+                    clipService.deleteClip(savedClip.getId());
+                    log.info("Deleted clip {} due to processing failure", savedClip.getId());
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new UploadResponse(
+                            null,
+                            "error",
+                            "Failed to save MP3 file: " + e.getMessage(),
+                            null));
+                }
+            } else if (isVideo) {
+                // Video files: extract audio via gRPC
+                log.info("Video file detected, extracting audio via gRPC");
+                try {
+                    String uploadedFilePath = storageService.saveUpload(file);
+                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
+                    storageService.deleteFile(uploadedFilePath);
+                    log.info("Deleted original video file: {}", uploadedFilePath);
 
+                    savedClip.setAudioFileUrl(audioFilePath);
+                    savedClip.setIsProcessed(true);
+                    clipService.updateClip(savedClip.getId(), savedClip);
                     log.info("Audio extraction completed: {}", audioFilePath);
                 } catch (Exception e) {
-                    log.error("Failed to process audio", e);
-                    // Keep clip as unprocessed, user can retry later
-                    return ResponseEntity.status(HttpStatus.CREATED).body(new UploadResponse(
-                            savedClip.getId(),
+                    log.error("Failed to process video audio: {}", e.getMessage(), e);
+                    clipService.deleteClip(savedClip.getId());
+                    log.info("Deleted clip {} due to processing failure", savedClip.getId());
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new UploadResponse(
+                            null,
                             "error",
-                            "File uploaded but audio processing failed: " + e.getMessage(),
+                            "Failed to process audio: " + e.getMessage(),
                             null));
                 }
             } else {
-                // Audio file - transcode to MP3 in audio directory
+                // Other audio formats: transcode to MP3 via gRPC
                 log.info("Audio file detected, transcoding to MP3 via gRPC");
                 try {
-                    // Save original audio temporarily to uploads directory
                     String uploadedFilePath = storageService.saveUpload(file);
-
-                    // Convert to MP3 using the same extractAudio call (works for audio inputs too)
                     audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
-
-                    // Delete original uploaded audio to save space
                     storageService.deleteFile(uploadedFilePath);
                     log.info("Deleted original audio file: {}", uploadedFilePath);
 
                     savedClip.setAudioFileUrl(audioFilePath);
                     savedClip.setIsProcessed(true);
                     clipService.updateClip(savedClip.getId(), savedClip);
-
                     log.info("Audio transcoding completed: {}", audioFilePath);
                 } catch (Exception e) {
-                    log.error("Failed to transcode audio", e);
-                    return ResponseEntity.status(HttpStatus.CREATED).body(new UploadResponse(
-                            savedClip.getId(),
+                    log.error("Failed to transcode audio: {}", e.getMessage(), e);
+                    clipService.deleteClip(savedClip.getId());
+                    log.info("Deleted clip {} due to processing failure", savedClip.getId());
+                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new UploadResponse(
+                            null,
                             "error",
-                            "File uploaded but audio processing failed: " + e.getMessage(),
+                            "Failed to process audio: " + e.getMessage(),
                             null));
                 }
             }
@@ -198,7 +207,12 @@ public class ClipController {
                 lowerFilename.endsWith(".avi") ||
                 lowerFilename.endsWith(".mov") ||
                 lowerFilename.endsWith(".webm") ||
-                lowerFilename.endsWith(".mkv") ||
-                lowerFilename.endsWith(".flv");
+                lowerFilename.endsWith(".mkv");
+    }
+
+    private boolean isMP3File(String filename) {
+        if (filename == null)
+            return false;
+        return filename.toLowerCase().endsWith(".mp3");
     }
 }

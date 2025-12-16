@@ -22,7 +22,6 @@ public interface ClipRepository extends JpaRepository<Clip, Long> {
     List<Clip> findByIsProcessed(Boolean isProcessed);
     
     @Query("SELECT c FROM Clip c WHERE " +
-           "LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
-           "LOWER(c.description) LIKE LOWER(CONCAT('%', :query, '%'))")
+           "LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%'))")
     Page<Clip> searchClips(@Param("query") String query, Pageable pageable);
 }

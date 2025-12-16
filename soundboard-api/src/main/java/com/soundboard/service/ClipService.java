@@ -129,7 +129,6 @@ public class ClipService {
         return clipRepository.findById(id)
                 .map(clip -> {
                     clip.setTitle(updatedClip.getTitle());
-                    clip.setDescription(updatedClip.getDescription());
                     clip.setAudioFileUrl(updatedClip.getAudioFileUrl());
                     clip.setThumbnailUrl(updatedClip.getThumbnailUrl());
                     clip.setIsProcessed(updatedClip.getIsProcessed());
@@ -150,7 +149,6 @@ public class ClipService {
         return new ClipDTO(
                 clip.getId(),
                 clip.getTitle(),
-                clip.getDescription(),
                 audioUrl,
                 clip.getThumbnailUrl(),
                 clip.getFileSizeBytes(),

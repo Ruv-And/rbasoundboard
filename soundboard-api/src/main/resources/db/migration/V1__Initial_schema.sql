@@ -1,7 +1,6 @@
 ﻿CREATE TABLE clips (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
-    description TEXT,
     original_file_url VARCHAR(500) NOT NULL,
     audio_file_url VARCHAR(500),
     thumbnail_url VARCHAR(500),

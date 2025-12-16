@@ -98,9 +98,7 @@ const ClipCard: React.FC<ClipCardProps> = ({ clip, onPlay, onDelete }) => {
   };
 
   const handleDelete = () => {
-    if (window.confirm("Are you sure you want to delete this clip?")) {
-      onDelete(clip.id);
-    }
+    onDelete(clip.id);
   };
 
   const handleTitleSave = () => {

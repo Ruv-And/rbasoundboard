@@ -21,9 +21,6 @@ public class Clip {
     @Column(nullable = false)
     private String title;
     
-    @Column(columnDefinition = "TEXT")
-    private String description;
-    
     @Column(name = "original_file_url", length = 500)
     private String originalFileUrl;
     
