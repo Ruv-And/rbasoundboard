@@ -4,6 +4,9 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,6 +16,7 @@ import soundboard.AudioProcessorOuterClass;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.UUID;
@@ -30,6 +34,18 @@ public class AudioProcessorService {
     @Value("${grpc.audio-processor.port}")
     private int audioProcessorPort;
 
+    @Value("${grpc.audio-processor.use-tls:false}")
+    private boolean useTls;
+
+    @Value("${grpc.audio-processor.ca-cert-path:}")
+    private String caCertPath;
+
+    @Value("${grpc.audio-processor.client-cert-path:}")
+    private String clientCertPath;
+
+    @Value("${grpc.audio-processor.client-key-path:}")
+    private String clientKeyPath;
+
     @Value("${storage.audio-dir}")
     private String audioDir;
 
@@ -37,12 +53,56 @@ public class AudioProcessorService {
     private AudioProcessorGrpc.AudioProcessorStub asyncStub;
 
     @PostConstruct
-    public void init() {
+    public void init() throws Exception {
         log.info("Initializing gRPC channel to audio processor at {}:{}", audioProcessorHost, audioProcessorPort);
-        channel = ManagedChannelBuilder
-                .forAddress(audioProcessorHost, audioProcessorPort)
-                .usePlaintext()
-                .build();
+        
+        if (useTls) {
+            log.info("Configuring SSL/TLS for gRPC channel");
+            
+            var sslContextBuilder = GrpcSslContexts.forClient();
+            
+            // Load CA certificate (server verification)
+            if (caCertPath != null && !caCertPath.isEmpty()) {
+                File caCertFile = new File(caCertPath);
+                if (!caCertFile.exists()) {
+                    throw new IllegalStateException("CA certificate not found: " + caCertPath);
+                }
+                sslContextBuilder.trustManager(caCertFile);
+                log.info("Loaded CA certificate: {}", caCertPath);
+            }
+            
+            // Optional: Mutual TLS (client certificate authentication)
+            if (clientCertPath != null && !clientCertPath.isEmpty() 
+                    && clientKeyPath != null && !clientKeyPath.isEmpty()) {
+                File clientCertFile = new File(clientCertPath);
+                File clientKeyFile = new File(clientKeyPath);
+                
+                if (!clientCertFile.exists() || !clientKeyFile.exists()) {
+                    throw new IllegalStateException("Client certificate or key not found");
+                }
+                
+                sslContextBuilder.keyManager(clientCertFile, clientKeyFile);
+                log.info("Loaded client certificate for mutual TLS");
+            }
+            
+            SslContext sslContext = sslContextBuilder.build();
+            
+            channel = NettyChannelBuilder
+                    .forAddress(audioProcessorHost, audioProcessorPort)
+                    .sslContext(sslContext)
+                    .build();
+            
+            log.info("✓ SSL/TLS channel established");
+        } else {
+            log.warn("WARNING: Using insecure gRPC channel (dev mode)");
+            log.warn("For production, set: grpc.audio-processor.use-tls=true");
+            
+            channel = ManagedChannelBuilder
+                    .forAddress(audioProcessorHost, audioProcessorPort)
+                    .usePlaintext()
+                    .build();
+        }
+        
         asyncStub = AudioProcessorGrpc.newStub(channel);
     }
 
@@ -187,63 +247,77 @@ public class AudioProcessorService {
     }
     /**
      * Stream processed audio using async gRPC (no disk writes)
+     * Writes are serialized on the servlet StreamingResponseBody thread to avoid cross-thread OutputStream writes.
      */
-    public void applyEffectsStream(String audioPath, float speedFactor, float pitchFactor, OutputStream outputStream) 
+    public void applyEffectsStream(String audioPath, float speedFactor, float pitchFactor, OutputStream outputStream)
             throws IOException, Exception {
         log.info("Applying effects with streaming: speed={}, pitch={} for {}", speedFactor, pitchFactor, audioPath);
-        
+
         AudioProcessorOuterClass.ApplyEffectsRequest request = AudioProcessorOuterClass.ApplyEffectsRequest.newBuilder()
                 .setAudioPath(audioPath)
                 .setSpeedFactor(speedFactor)
                 .setPitchFactor(pitchFactor)
                 .build();
-        
+
+        // Bounded queue provides backpressure toward the gRPC callback threads
+        final int QUEUE_CAPACITY = 16;
+        final byte[] POISON = new byte[0];
+        var queue = new java.util.concurrent.ArrayBlockingQueue<byte[]>(QUEUE_CAPACITY);
         CountDownLatch completionLatch = new CountDownLatch(1);
         AtomicReference<Throwable> errorRef = new AtomicReference<>();
         int[] chunkCount = {0};
-        
-        StreamObserver<AudioProcessorOuterClass.AudioChunk> responseObserver = new StreamObserver<AudioProcessorOuterClass.AudioChunk>() {
+
+        StreamObserver<AudioProcessorOuterClass.AudioChunk> responseObserver = new StreamObserver<>() {
             @Override
             public void onNext(AudioProcessorOuterClass.AudioChunk chunk) {
                 try {
-                    outputStream.write(chunk.getData().toByteArray());
+                    // Block if the consumer is slower; this honors backpressure end-to-end
+                    queue.put(chunk.getData().toByteArray());
                     chunkCount[0]++;
-                } catch (IOException e) {
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     errorRef.set(e);
-                    log.error("Failed to write chunk to output stream", e);
                 }
             }
 
             @Override
             public void onError(Throwable t) {
                 errorRef.set(t);
+                // Unblock consumer
+                queue.offer(POISON);
                 completionLatch.countDown();
             }
 
             @Override
             public void onCompleted() {
-                try {
-                    outputStream.flush();
-                } catch (IOException e) {
-                    log.warn("Failed to flush output stream", e);
-                }
+                queue.offer(POISON);
                 completionLatch.countDown();
             }
         };
-        
+
         try {
             asyncStub.applyEffectsStream(request, responseObserver);
-            
-            if (!completionLatch.await(120, TimeUnit.SECONDS)) {
-                throw new Exception("Audio stream timed out");
+
+            // Drain on the caller thread (StreamingResponseBody thread) to keep OutputStream single-threaded
+            while (true) {
+                byte[] data = queue.take();
+                if (data == POISON) {
+                    break;
+                }
+                outputStream.write(data);
             }
-            
+
+            if (!completionLatch.await(10, TimeUnit.SECONDS)) {
+                log.warn("Stream completion latch not signaled within timeout; continuing after draining queue");
+            }
+
             if (errorRef.get() != null) {
                 throw new Exception("Stream error: " + errorRef.get().getMessage(), errorRef.get());
             }
-            
+
+            outputStream.flush();
             log.info("Effects applied and streamed successfully: {} chunks", chunkCount[0]);
-            
+
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new Exception("Interrupted during stream", e);

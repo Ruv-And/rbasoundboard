@@ -6,6 +6,7 @@
 #include <chrono>
 #include <algorithm>
 #include <functional>
+#include <grpcpp/security/server_credentials.h>
 
 using namespace std::chrono_literals;
 
@@ -29,7 +30,53 @@ void AudioProcessorAsync::Run(const std::string& server_address, int num_cq_thre
     
     // Create server builder and completion queues
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+    
+    // Configure credentials: SSL/TLS for production, insecure for dev
+    std::shared_ptr<grpc::ServerCredentials> creds;
+    const char* certPath = std::getenv("GRPC_SERVER_CERT_PATH");
+    const char* keyPath = std::getenv("GRPC_SERVER_KEY_PATH");
+    const char* rootCertPath = std::getenv("GRPC_SERVER_ROOT_CERT_PATH");
+    
+    if (certPath && keyPath) {
+        std::cout << "Loading SSL/TLS credentials for secure gRPC..." << std::endl;
+        grpc::SslServerCredentialsOptions ssl_opts;
+        
+        // Load server certificate and private key
+        grpc::SslServerCredentialsOptions::PemKeyCertPair key_cert_pair;
+        std::ifstream cert_file(certPath);
+        std::ifstream key_file(keyPath);
+        
+        if (!cert_file || !key_file) {
+            std::cerr << "ERROR: Failed to open SSL certificate or key files" << std::endl;
+            throw std::runtime_error("SSL configuration error");
+        }
+        
+        key_cert_pair.cert_chain = std::string((std::istreambuf_iterator<char>(cert_file)),
+                                               std::istreambuf_iterator<char>());
+        key_cert_pair.private_key = std::string((std::istreambuf_iterator<char>(key_file)),
+                                                std::istreambuf_iterator<char>());
+        ssl_opts.pem_key_cert_pairs.push_back(key_cert_pair);
+        
+        // Optional: client certificate verification (mutual TLS)
+        if (rootCertPath) {
+            std::ifstream root_cert_file(rootCertPath);
+            if (root_cert_file) {
+                ssl_opts.pem_root_certs = std::string((std::istreambuf_iterator<char>(root_cert_file)),
+                                                     std::istreambuf_iterator<char>());
+                ssl_opts.client_certificate_request = GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
+                std::cout << "Mutual TLS enabled (client cert verification required)" << std::endl;
+            }
+        }
+        
+        creds = grpc::SslServerCredentials(ssl_opts);
+        std::cout << "✓ SSL/TLS credentials configured" << std::endl;
+    } else {
+        std::cout << "WARNING: Using insecure credentials (dev mode)" << std::endl;
+        std::cout << "For production, set: GRPC_SERVER_CERT_PATH, GRPC_SERVER_KEY_PATH" << std::endl;
+        creds = grpc::InsecureServerCredentials();
+    }
+    
+    builder.AddListeningPort(server_address, creds);
     builder.RegisterService(service_.get());
     
     // Create multiple completion queues (one per worker thread)

@@ -3,10 +3,10 @@ package com.soundboard.controller;
 import com.soundboard.dto.ClipDTO;
 import com.soundboard.dto.UploadResponse;
 import com.soundboard.model.Clip;
-import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.StorageService;
 import com.soundboard.service.PlayStatsService;
+import com.soundboard.service.UploadProcessingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -26,8 +26,8 @@ public class ClipController {
 
     private final ClipService clipService;
     private final StorageService storageService;
-    private final AudioProcessorService audioProcessorService;
     private final PlayStatsService playStatsService;
+    private final UploadProcessingService uploadProcessingService;
 
     @GetMapping
     public ResponseEntity<Page<ClipDTO>> getAllClips(
@@ -112,61 +112,35 @@ public class ClipController {
                             "Failed to save MP3 file: " + e.getMessage(),
                             null));
                 }
-            } else if (isVideo) {
-                // Video files: extract audio via gRPC
-                log.info("Video file detected, extracting audio via gRPC");
-                try {
-                    String uploadedFilePath = storageService.saveUpload(file);
-                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
-                    storageService.deleteFile(uploadedFilePath);
-                    log.info("Deleted original video file: {}", uploadedFilePath);
-
-                    savedClip.setAudioFileUrl(audioFilePath);
-                    savedClip.setIsProcessed(true);
-                    clipService.updateClip(savedClip.getId(), savedClip);
-                    log.info("Audio extraction completed: {}", audioFilePath);
-                } catch (Exception e) {
-                    log.error("Failed to process video audio: {}", e.getMessage(), e);
-                    clipService.deleteClip(savedClip.getId());
-                    log.info("Deleted clip {} due to processing failure", savedClip.getId());
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new UploadResponse(
-                            null,
-                            "error",
-                            "Failed to process audio: " + e.getMessage(),
-                            null));
-                }
             } else {
-                // Other audio formats: transcode to MP3 via gRPC
-                log.info("Audio file detected, transcoding to MP3 via gRPC");
+                // Video or non-MP3 audio: save upload and process asynchronously via gRPC
+                log.info("File requires processing (video or non-MP3); queuing async job");
                 try {
                     String uploadedFilePath = storageService.saveUpload(file);
-                    audioFilePath = audioProcessorService.extractAudio(uploadedFilePath, "mp3", 192);
-                    storageService.deleteFile(uploadedFilePath);
-                    log.info("Deleted original audio file: {}", uploadedFilePath);
-
-                    savedClip.setAudioFileUrl(audioFilePath);
-                    savedClip.setIsProcessed(true);
-                    clipService.updateClip(savedClip.getId(), savedClip);
-                    log.info("Audio transcoding completed: {}", audioFilePath);
+                    uploadProcessingService.processAsync(savedClip, uploadedFilePath);
+                    log.info("Queued async processing for clip {} at {}", savedClip.getId(), uploadedFilePath);
                 } catch (Exception e) {
-                    log.error("Failed to transcode audio: {}", e.getMessage(), e);
+                    log.error("Failed to enqueue processing job", e);
                     clipService.deleteClip(savedClip.getId());
-                    log.info("Deleted clip {} due to processing failure", savedClip.getId());
+                    log.info("Deleted clip {} due to enqueue failure", savedClip.getId());
                     return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new UploadResponse(
                             null,
                             "error",
-                            "Failed to process audio: " + e.getMessage(),
+                            "Failed to queue processing: " + e.getMessage(),
                             null));
                 }
             }
 
             UploadResponse response = new UploadResponse(
                     savedClip.getId(),
-                    "success",
-                    "File uploaded and processed successfully",
+                    savedClip.getIsProcessed() ? "success" : "processing",
+                    savedClip.getIsProcessed() ? "File uploaded and processed successfully" : "File uploaded; processing in background",
                     null);
 
-            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+            if (savedClip.getIsProcessed()) {
+                return ResponseEntity.status(HttpStatus.CREATED).body(response);
+            }
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
 
         } catch (org.hibernate.exception.ConstraintViolationException e) {
             log.error("Database constraint violation during upload", e);

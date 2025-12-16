@@ -51,5 +51,14 @@ audio/
 thumbnails/
 temp_audio/
 
+# SSL/TLS Certificates (NEVER commit private keys)
+certs/
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+*.csr
+
 # Dont ignore Dockerfiles
 !**/Dockerfile
