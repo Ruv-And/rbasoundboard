@@ -103,6 +103,13 @@
             <artifactId>spring-kafka</artifactId>
         </dependency>
         
+        <!-- Rate Limiting: Bucket4j -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j_jdk17-core</artifactId>
+            <version>8.15.0</version>
+        </dependency>
+        
         <!-- Jackson for JSON serialization -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

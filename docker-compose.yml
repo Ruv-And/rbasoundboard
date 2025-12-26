@@ -107,6 +107,9 @@ services:
       GRPC_AUDIO_PROCESSOR_HOST: audio-processor
       GRPC_AUDIO_PROCESSOR_PORT: 50051
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # Rate limiting: 5 requests/second per IP (change to "global" for shared bucket)
+      RATE_LIMIT_RPS: "5"
+      RATE_LIMIT_SCOPE: "ip"
       # Production SSL/TLS (uncomment and provide certificates):
       # GRPC_AUDIO_PROCESSOR_USE_TLS: "true"
       # GRPC_AUDIO_PROCESSOR_CA_CERT_PATH: /certs/ca.crt
