@@ -56,8 +56,12 @@ export const clipService = {
     return response.data;
   },
 
-  deleteClip: async (id: string | number): Promise<void> => {
-    await api.delete(`/clips/${id}`);
+  deleteClip: async (id: string | number, password: string): Promise<void> => {
+    await api.delete(`/clips/${id}`, {
+      headers: {
+        'X-Admin-Password': password
+      }
+    });
   },
 };
 

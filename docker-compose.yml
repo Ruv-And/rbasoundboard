@@ -16,7 +16,7 @@ services:
       # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       # check the actual application database (soundboard) rather than the default DB named after the user
-      test: ["CMD-SHELL", "pg_isready -U devuser -d soundboard"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -75,7 +75,7 @@ services:
       dockerfile: ./audio-processor-service/Dockerfile
     container_name: soundboard-audio-processor
     ports:
-      - "50051:50051"
+      - "${GRPC_PORT:-50051}:50051"
     environment:
       AUDIO_PROC_MAX_CONCURRENCY: "2"
       # Production SSL/TLS (uncomment and provide certificates):
@@ -99,17 +99,18 @@ services:
       dockerfile: ./soundboard-api/Dockerfile
     container_name: soundboard-api
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/soundboard
-      SPRING_DATASOURCE_USERNAME: devuser
-      SPRING_DATASOURCE_PASSWORD: devpass123
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       GRPC_AUDIO_PROCESSOR_HOST: audio-processor
-      GRPC_AUDIO_PROCESSOR_PORT: 50051
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      GRPC_AUDIO_PROCESSOR_PORT: ${GRPC_PORT:-50051}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       # Rate limiting: 5 requests/second per IP (change to "global" for shared bucket)
-      RATE_LIMIT_RPS: "5"
-      RATE_LIMIT_SCOPE: "ip"
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-5}
+      RATE_LIMIT_SCOPE: ${RATE_LIMIT_SCOPE:-ip}
       # Production SSL/TLS (uncomment and provide certificates):
       # GRPC_AUDIO_PROCESSOR_USE_TLS: "true"
       # GRPC_AUDIO_PROCESSOR_CA_CERT_PATH: /certs/ca.crt

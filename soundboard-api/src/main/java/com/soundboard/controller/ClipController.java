@@ -9,6 +9,7 @@ import com.soundboard.service.PlayStatsService;
 import com.soundboard.service.UploadProcessingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -28,6 +29,9 @@ public class ClipController {
     private final StorageService storageService;
     private final PlayStatsService playStatsService;
     private final UploadProcessingService uploadProcessingService;
+
+    @Value("${admin.password}")
+    private String adminPassword;
 
     @GetMapping
     public ResponseEntity<Page<ClipDTO>> getAllClips(
@@ -162,8 +166,22 @@ public class ClipController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteClip(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteClip(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Admin-Password", required = false) String password) {
         log.info("DELETE /api/clips/{}", id);
+        
+        // Validate admin password
+        if (password == null || password.trim().isEmpty()) {
+            log.warn("Delete attempt without password for clip {}", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        
+        if (!adminPassword.equals(password)) {
+            log.warn("Delete attempt with incorrect password for clip {}", id);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        
         clipService.deleteClip(id);
         return ResponseEntity.noContent().build();
     }

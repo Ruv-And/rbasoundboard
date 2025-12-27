@@ -58,6 +58,10 @@ grpc:
     host: ${GRPC_AUDIO_PROCESSOR_HOST:localhost}
     port: ${GRPC_AUDIO_PROCESSOR_PORT:50051}
 
+# Admin password for delete operations
+admin:
+  password: ${ADMIN_PASSWORD:admin123}
+
 # Logging
 logging:
   level:
