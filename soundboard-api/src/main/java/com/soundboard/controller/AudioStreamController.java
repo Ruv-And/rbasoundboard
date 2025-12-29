@@ -4,7 +4,6 @@ import com.soundboard.event.PlayEvent;
 import com.soundboard.service.AudioProcessorService;
 import com.soundboard.service.ClipService;
 import com.soundboard.service.PlayEventProducer;
-import com.soundboard.service.ProcessorBusyException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -83,7 +82,7 @@ public class AudioStreamController {
                     outputStream.flush();
                 }
             };
-            
+
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("audio/mpeg"))
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
@@ -94,7 +93,7 @@ public class AudioStreamController {
         // Apply effects via gRPC to C++ service with streaming (no disk writes)
         try {
             log.info("Applying effects with streaming: speed={}, pitch={}", speed, pitch);
-            
+
             // Use direct stream method which handles async with proper waits
             StreamingResponseBody responseBody = outputStream -> {
                 try {

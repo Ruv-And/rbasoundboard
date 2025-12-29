@@ -2,8 +2,6 @@ package com.soundboard.service;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
@@ -165,12 +163,6 @@ public class AudioProcessorService {
 
         if (errorRef.get() != null) {
             Throwable err = errorRef.get();
-            if (err instanceof StatusRuntimeException) {
-                StatusRuntimeException sre = (StatusRuntimeException) err;
-                if (sre.getStatus().getCode() == Status.Code.RESOURCE_EXHAUSTED) {
-                    throw new ProcessorBusyException("Audio processor is busy, please try again later");
-                }
-            }
             log.error("gRPC call to extractAudio failed", err);
             throw new Exception("Failed to communicate with audio processor: " + err.getMessage(), err);
         }
@@ -228,12 +220,6 @@ public class AudioProcessorService {
 
         if (errorRef.get() != null) {
             Throwable err = errorRef.get();
-            if (err instanceof StatusRuntimeException) {
-                StatusRuntimeException sre = (StatusRuntimeException) err;
-                if (sre.getStatus().getCode() == Status.Code.RESOURCE_EXHAUSTED) {
-                    throw new ProcessorBusyException("Audio processor is busy, please try again later");
-                }
-            }
             log.error("gRPC call to getAudioInfo failed", err);
             throw new Exception("Failed to communicate with audio processor: " + err.getMessage(), err);
         }
