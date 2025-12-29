@@ -25,13 +25,11 @@ AudioProcessorAsync::~AudioProcessorAsync() {
 }
 
 void AudioProcessorAsync::Run(const std::string& server_address, int num_cq_threads) {
-    // Create async service
     service_ = std::make_unique<soundboard::AudioProcessor::AsyncService>();
     
-    // Create server builder and completion queues
     grpc::ServerBuilder builder;
     
-    // Configure credentials: SSL/TLS for production, insecure for dev
+    // Configure credentials
     std::shared_ptr<grpc::ServerCredentials> creds;
     const char* certPath = std::getenv("GRPC_SERVER_CERT_PATH");
     const char* keyPath = std::getenv("GRPC_SERVER_KEY_PATH");
@@ -69,7 +67,7 @@ void AudioProcessorAsync::Run(const std::string& server_address, int num_cq_thre
         }
         
         creds = grpc::SslServerCredentials(ssl_opts);
-        std::cout << "✓ SSL/TLS credentials configured" << std::endl;
+        std::cout << "SSL/TLS credentials configured" << std::endl;
     } else {
         std::cout << "WARNING: Using insecure credentials (dev mode)" << std::endl;
         std::cout << "For production, set: GRPC_SERVER_CERT_PATH, GRPC_SERVER_KEY_PATH" << std::endl;
@@ -122,7 +120,6 @@ void AudioProcessorAsync::Run(const std::string& server_address, int num_cq_thre
     // Wait for server shutdown
     server_->Wait();
     
-    // Shutdown completion queues
     for (auto& cq : cqs_) {
         cq->Shutdown();
     }
