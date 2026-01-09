@@ -1,59 +1,40 @@
+# Build order: proto generation -> audio_proto library -> audio_server executable
+#
+# Linking strategy (GNU ld processes left-to-right, single pass):
+#   1. FFmpeg shared libs with --no-as-needed (prevents dropping "unused" .so files)
+#   2. audio_proto static library (gRPC/protobuf generated code)
+#   3. gRPC++ and transitive dependencies
+#   4. utf8_range with --whole-archive (ensures all symbols exported)
+#   5. Abseil static libraries
+#   6. System libraries (m, pthread, dl)
+
 cmake_minimum_required(VERSION 3.15)
 project(audio-processor-service)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find packages
+# --- Dependencies ---
 find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(absl REQUIRED)
-
-# Try to find utf8_range (may or may not work depending on install)
 find_package(utf8_range QUIET)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswresample libavfilter)
 
-# Proto files (use absolute path relative to this CMakeLists so builds from repo root work)
+# --- Proto Files ---
 set(PROTO_FILES ${CMAKE_CURRENT_SOURCE_DIR}/proto/audio_processor.proto)
 
-# Manually find utf8_range libraries (since find_package may not provide proper targets)
-file(GLOB UTF8_RANGE_LIBS
-    "/usr/local/lib/libutf8_range*.a"
-    "/usr/local/lib/libutf8_validity*.a"
-    "/usr/lib/libutf8_range*.a"
-    "/usr/lib/libutf8_validity*.a"
-)
+# --- Locate Static Libraries ---
+file(GLOB UTF8_RANGE_LIBS "/usr/local/lib/libutf8_range*.a" "/usr/local/lib/libutf8_validity*.a")
+list(FILTER UTF8_RANGE_LIBS EXCLUDE REGEX "libutf8_range_lib\\.a$")
 
-# Filter out duplicate utf8_range_lib.a if both libutf8_range.a and libutf8_range_lib.a exist
-# Keep only the main libutf8_range.a and libutf8_validity.a
-set(FILTERED_UTF8_RANGE_LIBS)
-foreach(lib ${UTF8_RANGE_LIBS})
-    if(NOT lib MATCHES "libutf8_range_lib\\.a$")
-        list(APPEND FILTERED_UTF8_RANGE_LIBS ${lib})
-    endif()
-endforeach()
+file(GLOB ABSL_STATIC_LIBS "/usr/local/lib/libabsl*.a")
 
-if(FILTERED_UTF8_RANGE_LIBS)
-    set(UTF8_RANGE_LIBS ${FILTERED_UTF8_RANGE_LIBS})
-    message(STATUS "Found utf8_range libs: ${UTF8_RANGE_LIBS}")
-else()
-    message(WARNING "No utf8_range libs found - linking may fail")
-endif()
-
-# Manually find Abseil static libs
-file(GLOB ABSL_STATIC_LIBS
-    "/usr/local/lib/libabsl*.a"
-    "/usr/lib/libabsl*.a"
-)
-if(ABSL_STATIC_LIBS)
-    message(STATUS "Found absl static libs (count: ${CMAKE_MATCH_COUNT})")
-else()
-    message(STATUS "No absl static libs found in /usr/local/lib or /usr/lib")
-endif()
-
-# Generate gRPC code
+# --- Proto Library ---
 add_library(audio_proto ${PROTO_FILES})
-target_link_libraries(audio_proto
-    PUBLIC
+
+target_link_libraries(audio_proto PUBLIC
     gRPC::grpc++
     protobuf::libprotobuf
     absl::log
@@ -62,7 +43,6 @@ target_link_libraries(audio_proto
     absl::status
 )
 
-# Link utf8_range and Abseil static libs if found
 if(UTF8_RANGE_LIBS)
     target_link_libraries(audio_proto PUBLIC ${UTF8_RANGE_LIBS})
 endif()
@@ -76,10 +56,7 @@ target_include_directories(audio_proto PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}/proto
 )
 
-# Generate protobuf code
 protobuf_generate(TARGET audio_proto LANGUAGE cpp)
-
-# Generate gRPC code
 protobuf_generate(
     TARGET audio_proto 
     LANGUAGE grpc 
@@ -87,34 +64,43 @@ protobuf_generate(
     PLUGIN "protoc-gen-grpc=\$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
 )
 
-# Main executable
+# --- Main Executable ---
 add_executable(audio_server 
     src/main.cpp
     src/audio_processor_service_async.cpp
 )
 
-# Link libraries with proper ordering - utf8_range must come after protobuf
-target_link_libraries(audio_server PRIVATE
-    audio_proto
-    gRPC::grpc++
-)
-
-# Force inclusion of all symbols from utf8_range static libraries
-if(UTF8_RANGE_LIBS)
-    target_link_libraries(audio_server PRIVATE 
-        -Wl,--whole-archive
-        ${UTF8_RANGE_LIBS}
-        -Wl,--no-whole-archive
-    )
-endif()
-
-# Link Abseil static libs
-if(ABSL_STATIC_LIBS)
-    target_link_libraries(audio_server PRIVATE ${ABSL_STATIC_LIBS})
-endif()
-
 target_include_directories(audio_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/proto
+    ${FFMPEG_INCLUDE_DIRS}
 )
+
+# --- Linking (order matters for GNU ld) ---
+
+# FFmpeg: linked first with --no-as-needed to ensure shared libs are kept
+target_link_libraries(audio_server PRIVATE
+    "-Wl,--no-as-needed"
+    "-L${FFMPEG_LIBRARY_DIRS}"
+    -lavformat -lavcodec -lavutil -lswresample -lavfilter
+    "-Wl,--as-needed"
+)
+
+# gRPC/Protobuf
+target_link_libraries(audio_server PRIVATE audio_proto gRPC::grpc++)
+
+# utf8_range: use --whole-archive to include all symbols
+if(UTF8_RANGE_LIBS)
+    target_link_libraries(audio_server PRIVATE
+        -Wl,--whole-archive ${UTF8_RANGE_LIBS} -Wl,--no-whole-archive
+    )
+endif()
+
+# Abseil
+if(ABSL_STATIC_LIBS)
+    target_link_libraries(audio_server PRIVATE ${ABSL_STATIC_LIBS})
+endif()
+
+# System
+target_link_libraries(audio_server PRIVATE m pthread dl)

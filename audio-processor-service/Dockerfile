@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     libavformat-dev \
     libavutil-dev \
     libswresample-dev \
+    libavfilter-dev \
     librubberband-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -65,19 +66,29 @@ COPY proto /app/proto
 COPY audio-processor-service/CMakeLists.txt /app/
 COPY audio-processor-service/src /app/src
 
-# Build the audio server
-RUN mkdir -p build && cd build && cmake .. && make -j$(nproc)
+# Build the audio server  
+# Note: Use --as-needed to avoid linking unnecessary libs, but first link objects
+RUN mkdir -p build && cd build && cmake .. && make VERBOSE=1 audio_server 2>&1 | tee build.log; \
+    if [ ! -f audio_server ]; then \
+        echo "=== Build failed, checking FFmpeg libs ==="; \
+        ldd /usr/lib/x86_64-linux-gnu/libavformat.so || true; \
+        exit 1; \
+    fi
 
 
 ### Runtime stage: small image with only runtime deps + binary
-FROM debian:bookworm-slim AS runtime
+FROM ubuntu:22.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install only runtime dependencies (ffmpeg + libs)
-RUN apt-get update && apt-get install -y \
+# Install only runtime dependencies (FFmpeg 4.x libs matching what was built against)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     libgcc-s1 \
-    ffmpeg \
+    libavformat58 \
+    libavcodec58 \
+    libavutil56 \
+    libswresample3 \
+    libavfilter7 \
     librubberband2 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

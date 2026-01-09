@@ -9,6 +9,13 @@
 #include <semaphore>
 #include "audio_processor.grpc.pb.h"
 
+// Forward declarations for FFmpeg types (avoid including headers directly)
+struct AVFormatContext;
+struct AVCodecContext;
+struct AVFilterGraph;
+struct AVFilterContext;
+struct AVFrame;
+
 // Async service implementation using the gRPC async pattern (CallData state machines)
 class AudioProcessorAsync {
 public:
@@ -58,9 +65,22 @@ private:
         soundboard::ApplyEffectsRequest request_;
         grpc::ServerAsyncWriter<soundboard::AudioChunk> writer_;
         bool streaming_started_;
+        bool streaming_no_effects_;
         FILE* ffmpeg_pipe_;
         char ffmpeg_buffer_[65536];
         int32_t chunk_sequence_;
+        
+        // libavfilter streaming state
+        AVFormatContext* streaming_in_fmt_;
+        AVCodecContext* streaming_dec_ctx_;
+        AVCodecContext* streaming_enc_ctx_;
+        AVFilterGraph* streaming_graph_;
+        AVFilterContext* streaming_src_ctx_;
+        AVFilterContext* streaming_sink_ctx_;
+        AVFrame* streaming_frame_;
+        AVFrame* streaming_filtered_frame_;
+        int streaming_audio_stream_idx_;
+        std::string streaming_filter_desc_;
         
         void start_processing();
         void send_next_chunk();
