@@ -147,19 +147,11 @@ static bool convert_to_mp3_libav(const std::string &in_path,
         return false;
     }
 
-    // Configure encoder parameters
+    // Configure encoder parameters - use FLTP to match what we need
     enc_ctx->sample_rate = 44100;
     enc_ctx->channel_layout = AV_CH_LAYOUT_STEREO;
-    enc_ctx->channels = av_get_channel_layout_nb_channels(enc_ctx->channel_layout);
-    // Choose a supported sample_fmt
-    if (enc->sample_fmts)
-    {
-        enc_ctx->sample_fmt = enc->sample_fmts[0];
-    }
-    else
-    {
-        enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
-    }
+    enc_ctx->channels = 2;
+    enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     enc_ctx->bit_rate = bitrate_kbps * 1000;
 
     // Some containers require global header
@@ -214,11 +206,14 @@ static bool convert_to_mp3_libav(const std::string &in_path,
         return false;
     }
 
-    // Setup resampler
+    // Setup resampler - handle decoder output to encoder input
+    uint64_t dec_channel_layout = dec_ctx->channel_layout;
+    if (!dec_channel_layout)
+        dec_channel_layout = av_get_default_channel_layout(dec_ctx->channels);
+
     SwrContext *swr = swr_alloc_set_opts(nullptr,
                                          enc_ctx->channel_layout, enc_ctx->sample_fmt, enc_ctx->sample_rate,
-                                         dec_ctx->channel_layout ? dec_ctx->channel_layout : av_get_default_channel_layout(dec_ctx->channels),
-                                         dec_ctx->sample_fmt, dec_ctx->sample_rate,
+                                         dec_channel_layout, dec_ctx->sample_fmt, dec_ctx->sample_rate,
                                          0, nullptr);
     if (!swr)
     {
@@ -249,53 +244,68 @@ static bool convert_to_mp3_libav(const std::string &in_path,
     AVFrame *resampled = av_frame_alloc();
     int64_t pts = 0;
 
+    // Helper lambda to encode and write a frame
+    auto encode_and_write = [&](AVFrame *f) -> bool
+    {
+        if (avcodec_send_frame(enc_ctx, f) < 0)
+            return false;
+
+        AVPacket *out_pkt = av_packet_alloc();
+        while (avcodec_receive_packet(enc_ctx, out_pkt) == 0)
+        {
+            out_pkt->stream_index = out_stream->index;
+            av_packet_rescale_ts(out_pkt, enc_ctx->time_base, out_stream->time_base);
+            if (av_interleaved_write_frame(out_fmt, out_pkt) < 0)
+            {
+                av_packet_free(&out_pkt);
+                return false;
+            }
+        }
+        av_packet_free(&out_pkt);
+        return true;
+    };
+
+    // Process all packets from input
     while (av_read_frame(in_fmt, pkt) >= 0)
     {
         if (pkt->stream_index == audio_stream_index)
         {
-            if (int ret = avcodec_send_packet(dec_ctx, pkt))
-            {
-                // non-fatal: skip
-            }
+            avcodec_send_packet(dec_ctx, pkt);
+
             while (avcodec_receive_frame(dec_ctx, frame) == 0)
             {
-                // Resample
+                // Resample frame
+                int dst_nb_samples = av_rescale_rnd(
+                    swr_get_delay(swr, dec_ctx->sample_rate) + frame->nb_samples,
+                    enc_ctx->sample_rate, dec_ctx->sample_rate, AV_ROUND_UP);
+
                 resampled->channel_layout = enc_ctx->channel_layout;
                 resampled->sample_rate = enc_ctx->sample_rate;
                 resampled->format = enc_ctx->sample_fmt;
-                resampled->nb_samples = av_rescale_rnd(swr_get_delay(swr, dec_ctx->sample_rate) + frame->nb_samples, enc_ctx->sample_rate, dec_ctx->sample_rate, AV_ROUND_UP);
-                if (int ret = av_frame_get_buffer(resampled, 0))
+                resampled->nb_samples = dst_nb_samples;
+
+                if (av_frame_get_buffer(resampled, 0) < 0)
                 {
-                    error_out = "av_frame_get_buffer: " + av_err_to_string(ret);
-                    goto cleanup;
-                }
-                if (int ret = swr_convert_frame(swr, resampled, frame))
-                {
-                    error_out = "swr_convert_frame: " + av_err_to_string(ret);
+                    error_out = "av_frame_get_buffer failed";
                     goto cleanup;
                 }
 
-                // Encode resampled frame
-                resampled->pts = pts;
-                pts += resampled->nb_samples;
-                if (int ret = avcodec_send_frame(enc_ctx, resampled))
+                if (swr_convert_frame(swr, resampled, frame) < 0)
                 {
-                    error_out = "avcodec_send_frame (encoder): " + av_err_to_string(ret);
+                    error_out = "swr_convert_frame failed";
                     goto cleanup;
                 }
-                AVPacket *out_pkt = av_packet_alloc();
-                while (avcodec_receive_packet(enc_ctx, out_pkt) == 0)
+
+                resampled->pts = pts;
+                pts += resampled->nb_samples;
+
+                if (!encode_and_write(resampled))
                 {
-                    out_pkt->stream_index = out_stream->index;
-                    av_packet_rescale_ts(out_pkt, enc_ctx->time_base, out_stream->time_base);
-                    if (int ret = av_interleaved_write_frame(out_fmt, out_pkt))
-                    {
-                        av_packet_free(&out_pkt);
-                        error_out = "av_interleaved_write_frame: " + av_err_to_string(ret);
-                        goto cleanup;
-                    }
-                    av_packet_free(&out_pkt);
+                    error_out = "encode_and_write failed";
+                    av_frame_unref(resampled);
+                    goto cleanup;
                 }
+
                 av_frame_unref(resampled);
                 av_frame_unref(frame);
             }
@@ -307,62 +317,83 @@ static bool convert_to_mp3_libav(const std::string &in_path,
     avcodec_send_packet(dec_ctx, nullptr);
     while (avcodec_receive_frame(dec_ctx, frame) == 0)
     {
+        // Resample leftover frame
+        int dst_nb_samples = av_rescale_rnd(
+            swr_get_delay(swr, dec_ctx->sample_rate) + frame->nb_samples,
+            enc_ctx->sample_rate, dec_ctx->sample_rate, AV_ROUND_UP);
+
         resampled->channel_layout = enc_ctx->channel_layout;
         resampled->sample_rate = enc_ctx->sample_rate;
         resampled->format = enc_ctx->sample_fmt;
-        resampled->nb_samples = av_rescale_rnd(swr_get_delay(swr, dec_ctx->sample_rate) + frame->nb_samples, enc_ctx->sample_rate, dec_ctx->sample_rate, AV_ROUND_UP);
-        if (int ret = av_frame_get_buffer(resampled, 0))
+        resampled->nb_samples = dst_nb_samples;
+
+        if (av_frame_get_buffer(resampled, 0) < 0)
         {
-            error_out = "av_frame_get_buffer: " + av_err_to_string(ret);
+            error_out = "av_frame_get_buffer failed (flush)";
+            av_frame_unref(frame);
             goto cleanup;
         }
-        if (int ret = swr_convert_frame(swr, resampled, frame))
+
+        if (swr_convert_frame(swr, resampled, frame) < 0)
         {
-            error_out = "swr_convert_frame: " + av_err_to_string(ret);
+            error_out = "swr_convert_frame failed (flush)";
+            av_frame_unref(frame);
             goto cleanup;
         }
+
         resampled->pts = pts;
         pts += resampled->nb_samples;
-        if (int ret = avcodec_send_frame(enc_ctx, resampled))
+
+        if (!encode_and_write(resampled))
         {
-            error_out = "avcodec_send_frame (encoder): " + av_err_to_string(ret);
+            error_out = "encode_and_write failed (flush)";
+            av_frame_unref(resampled);
+            av_frame_unref(frame);
             goto cleanup;
         }
-        AVPacket *out_pkt = av_packet_alloc();
-        while (avcodec_receive_packet(enc_ctx, out_pkt) == 0)
-        {
-            out_pkt->stream_index = out_stream->index;
-            av_packet_rescale_ts(out_pkt, enc_ctx->time_base, out_stream->time_base);
-            if (int ret = av_interleaved_write_frame(out_fmt, out_pkt))
-            {
-                av_packet_free(&out_pkt);
-                error_out = "av_interleaved_write_frame: " + av_err_to_string(ret);
-                goto cleanup;
-            }
-            av_packet_free(&out_pkt);
-        }
+
         av_frame_unref(resampled);
         av_frame_unref(frame);
     }
 
-    // Flush encoder
-    if (int ret = avcodec_send_frame(enc_ctx, nullptr))
+    // Flush resampler (in case there are leftover samples)
     {
-        // ignore
+        int dst_nb_samples = av_rescale_rnd(
+            swr_get_delay(swr, dec_ctx->sample_rate),
+            enc_ctx->sample_rate, dec_ctx->sample_rate, AV_ROUND_UP);
+
+        if (dst_nb_samples > 0)
+        {
+            resampled->channel_layout = enc_ctx->channel_layout;
+            resampled->sample_rate = enc_ctx->sample_rate;
+            resampled->format = enc_ctx->sample_fmt;
+            resampled->nb_samples = dst_nb_samples;
+
+            if (av_frame_get_buffer(resampled, 0) == 0 &&
+                swr_convert_frame(swr, resampled, nullptr) == 0)
+            {
+                resampled->pts = pts;
+                pts += resampled->nb_samples;
+                encode_and_write(resampled);
+                av_frame_unref(resampled);
+            }
+        }
     }
+
+    // Flush encoder
     {
+        avcodec_send_frame(enc_ctx, nullptr);
         AVPacket *out_pkt = av_packet_alloc();
         while (avcodec_receive_packet(enc_ctx, out_pkt) == 0)
         {
             out_pkt->stream_index = out_stream->index;
             av_packet_rescale_ts(out_pkt, enc_ctx->time_base, out_stream->time_base);
-            if (int ret = av_interleaved_write_frame(out_fmt, out_pkt))
+            if (av_interleaved_write_frame(out_fmt, out_pkt) < 0)
             {
+                error_out = "av_interleaved_write_frame failed (encoder flush)";
                 av_packet_free(&out_pkt);
-                error_out = "av_interleaved_write_frame (flush): " + av_err_to_string(ret);
                 goto cleanup;
             }
-            av_packet_unref(out_pkt);
         }
         av_packet_free(&out_pkt);
     }
@@ -930,9 +961,9 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
     }
 
     // Set output format constraints on the sink to match encoder requirements
-    static const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE };
-    static const int64_t out_channel_layouts[] = { AV_CH_LAYOUT_STEREO, -1 };
-    static const int out_sample_rates[] = { 44100, -1 };
+    static const enum AVSampleFormat out_sample_fmts[] = {AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE};
+    static const int64_t out_channel_layouts[] = {AV_CH_LAYOUT_STEREO, -1};
+    static const int out_sample_rates[] = {44100, -1};
 
     av_opt_set_int_list(sink_ctx, "sample_fmts", out_sample_fmts, AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
     av_opt_set_int_list(sink_ctx, "channel_layouts", out_channel_layouts, -1, AV_OPT_SEARCH_CHILDREN);
@@ -946,7 +977,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
     {
         char atempo_args[64];
         snprintf(atempo_args, sizeof(atempo_args), "tempo=%.2f", speed);
-        
+
         const AVFilter *atempo_filter = avfilter_get_by_name("atempo");
         if (!atempo_filter)
         {
@@ -1157,7 +1188,8 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
     bool got_output = false;
 
     // Helper lambda to try encoding filtered frames and sending output
-    auto try_encode_and_send = [&]() -> bool {
+    auto try_encode_and_send = [&]() -> bool
+    {
         while (av_buffersink_get_frame(streaming_sink_ctx_, streaming_filtered_frame_) >= 0)
         {
             // Set proper PTS for the encoder
@@ -1166,7 +1198,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
 
             int ret = avcodec_send_frame(streaming_enc_ctx_, streaming_filtered_frame_);
             av_frame_unref(streaming_filtered_frame_);
-            
+
             if (ret < 0)
             {
                 continue;
@@ -1194,7 +1226,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
     {
         AVPacket *pkt = av_packet_alloc();
         int read_ret = av_read_frame(streaming_in_fmt_, pkt);
-        
+
         if (read_ret >= 0)
         {
             if (pkt->stream_index == streaming_audio_stream_idx_)
@@ -1204,7 +1236,11 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
                 while (avcodec_receive_frame(streaming_dec_ctx_, streaming_frame_) == 0)
                 {
                     // Push frame to filter graph
-                    av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF);
+                    if (av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF) < 0)
+                    {
+                        av_frame_unref(streaming_frame_);
+                        break;
+                    }
                     av_frame_unref(streaming_frame_);
 
                     // Try to get filtered output and encode
@@ -1231,7 +1267,11 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
     {
         while (avcodec_receive_frame(streaming_dec_ctx_, streaming_frame_) == 0)
         {
-            av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF);
+            if (av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF) < 0)
+            {
+                av_frame_unref(streaming_frame_);
+                break;
+            }
             av_frame_unref(streaming_frame_);
 
             if (try_encode_and_send())
@@ -1245,7 +1285,10 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
         {
             // Flush the filter graph
             filter_flushed_ = true;
-            av_buffersrc_add_frame_flags(streaming_src_ctx_, nullptr, 0);
+            if (av_buffersrc_add_frame_flags(streaming_src_ctx_, nullptr, 0) < 0)
+            {
+                // Filter flushing failed - continue anyway
+            }
         }
     }
 
