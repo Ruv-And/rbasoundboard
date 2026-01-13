@@ -68,6 +68,7 @@ protobuf_generate(
 add_executable(audio_server 
     src/main.cpp
     src/audio_processor_service_async.cpp
+    src/audio_conversion.cpp
 )
 
 target_include_directories(audio_server PRIVATE
