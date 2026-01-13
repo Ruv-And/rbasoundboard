@@ -20,7 +20,7 @@
     
     <properties>
         <java.version>25</java.version>
-        <grpc.version>1.62.0</grpc.version>
+        <grpc.version>1.68.1</grpc.version>
         <protobuf.version>3.25.5</protobuf.version>
     </properties>
     

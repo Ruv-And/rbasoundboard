@@ -6,6 +6,7 @@
 #include <chrono>
 #include <algorithm>
 #include <functional>
+#include <cinttypes>
 
 // FFmpeg is a C library - must use extern "C" to prevent C++ name mangling
 extern "C"
@@ -633,7 +634,8 @@ AudioProcessorAsync::ApplyEffectsStreamCallData::ApplyEffectsStreamCallData(
       ffmpeg_pipe_(nullptr), chunk_sequence_(0),
       streaming_in_fmt_(nullptr), streaming_dec_ctx_(nullptr), streaming_enc_ctx_(nullptr),
       streaming_graph_(nullptr), streaming_src_ctx_(nullptr), streaming_sink_ctx_(nullptr),
-      streaming_frame_(nullptr), streaming_filtered_frame_(nullptr), streaming_audio_stream_idx_(-1)
+      streaming_frame_(nullptr), streaming_filtered_frame_(nullptr), streaming_audio_stream_idx_(-1),
+      decoder_flushed_(false), filter_flushed_(false), encoder_flushed_(false), streaming_pts_(0)
 {
     Proceed();
 }
@@ -775,7 +777,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
 
     // Decode input
     AVStream *in_stream = in_fmt->streams[audio_stream_index];
-    AVCodec *dec = avcodec_find_decoder(in_stream->codecpar->codec_id);
+    const AVCodec *dec = avcodec_find_decoder(in_stream->codecpar->codec_id);
     if (!dec)
     {
         std::cerr << "  ERROR: decoder not found" << std::endl;
@@ -805,7 +807,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
     }
 
     // Setup encoder
-    AVCodec *enc = avcodec_find_encoder(AV_CODEC_ID_MP3);
+    const AVCodec *enc = avcodec_find_encoder(AV_CODEC_ID_MP3);
     if (!enc)
     {
         std::cerr << "  ERROR: MP3 encoder not found" << std::endl;
@@ -830,14 +832,8 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
     enc_ctx->sample_rate = 44100;
     enc_ctx->channel_layout = AV_CH_LAYOUT_STEREO;
     enc_ctx->channels = 2;
-    if (enc->sample_fmts)
-    {
-        enc_ctx->sample_fmt = enc->sample_fmts[0];
-    }
-    else
-    {
-        enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
-    }
+    // Use FLTP (float planar) which is well-supported by libmp3lame
+    enc_ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
     enc_ctx->bit_rate = 192000;
 
     if (int ret = avcodec_open2(enc_ctx, enc, nullptr))
@@ -863,20 +859,38 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
         return;
     }
 
-    // Source filter (input)
-    char ch_layout_str[256];
-    snprintf(ch_layout_str, sizeof(ch_layout_str), "0x%lx", dec_ctx->channel_layout);
+    // Source filter (input) - abuffer
+    uint64_t channel_layout = dec_ctx->channel_layout;
+    if (!channel_layout)
+    {
+        channel_layout = av_get_default_channel_layout(dec_ctx->channels);
+    }
 
     char src_args[512];
     snprintf(src_args, sizeof(src_args),
-             "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
+             "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%" PRIx64,
              1, dec_ctx->sample_rate,
              dec_ctx->sample_rate,
              av_get_sample_fmt_name(dec_ctx->sample_fmt),
-             ch_layout_str);
+             channel_layout);
+
+    std::cout << "  Filter source args: " << src_args << std::endl;
 
     AVFilterContext *src_ctx = nullptr;
-    if (int ret = avfilter_graph_create_filter(&src_ctx, avfilter_get_by_name("abuffer"), "in", src_args, nullptr, graph))
+    const AVFilter *abuffer = avfilter_get_by_name("abuffer");
+    if (!abuffer)
+    {
+        std::cerr << "  ERROR: abuffer filter not found" << std::endl;
+        avfilter_graph_free(&graph);
+        avcodec_free_context(&enc_ctx);
+        avcodec_free_context(&dec_ctx);
+        avformat_close_input(&in_fmt);
+        status_ = FINISH;
+        writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "abuffer filter not found"), this);
+        return;
+    }
+
+    if (int ret = avfilter_graph_create_filter(&src_ctx, abuffer, "in", src_args, nullptr, graph))
     {
         std::cerr << "  ERROR: failed to create abuffer: " << av_err_to_string(ret) << std::endl;
         avfilter_graph_free(&graph);
@@ -888,58 +902,22 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
         return;
     }
 
-    // Effects filters + aformat (convert to encoder's format)
-    AVFilterContext *last_ctx = src_ctx;
-
-    // Apply custom filter graph (atempo, rubberband, etc)
-    if (!filter_desc.empty())
-    {
-        AVFilterContext *custom_ctx = nullptr;
-        if (int ret = avfilter_graph_create_filter(&custom_ctx, avfilter_get_by_name("abuffer"), "dummy", src_args, nullptr, graph))
-        {
-            // Fallback: add filters individually
-        }
-        else
-        {
-            // Link src -> custom
-            if (int ret = avfilter_link(src_ctx, 0, custom_ctx, 0))
-            {
-                std::cerr << "  WARNING: Failed to link to custom filter, will apply as chain" << std::endl;
-            }
-            else
-            {
-                last_ctx = custom_ctx;
-            }
-        }
-    }
-
-    // Format conversion filter to ensure output matches encoder
-    char aformat_args[256];
-    snprintf(aformat_args, sizeof(aformat_args),
-             "sample_fmts=%s:sample_rates=%d:channel_layouts=stereo",
-             av_get_sample_fmt_name(enc_ctx->sample_fmt),
-             enc_ctx->sample_rate);
-
-    AVFilterContext *aformat_ctx = nullptr;
-    if (int ret = avfilter_graph_create_filter(&aformat_ctx, avfilter_get_by_name("aformat"), "out_fmt", aformat_args, nullptr, graph))
-    {
-        std::cerr << "  WARNING: Failed to create aformat filter" << std::endl;
-    }
-    else
-    {
-        if (int ret = avfilter_link(last_ctx, 0, aformat_ctx, 0))
-        {
-            std::cerr << "  WARNING: Failed to link to aformat" << std::endl;
-        }
-        else
-        {
-            last_ctx = aformat_ctx;
-        }
-    }
-
-    // Sink filter (output)
+    // Sink filter (output) - abuffersink
     AVFilterContext *sink_ctx = nullptr;
-    if (int ret = avfilter_graph_create_filter(&sink_ctx, avfilter_get_by_name("abuffersink"), "out", nullptr, nullptr, graph))
+    const AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
+    if (!abuffersink)
+    {
+        std::cerr << "  ERROR: abuffersink filter not found" << std::endl;
+        avfilter_graph_free(&graph);
+        avcodec_free_context(&enc_ctx);
+        avcodec_free_context(&dec_ctx);
+        avformat_close_input(&in_fmt);
+        status_ = FINISH;
+        writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "abuffersink filter not found"), this);
+        return;
+    }
+
+    if (int ret = avfilter_graph_create_filter(&sink_ctx, abuffersink, "out", nullptr, nullptr, graph))
     {
         std::cerr << "  ERROR: failed to create abuffersink: " << av_err_to_string(ret) << std::endl;
         avfilter_graph_free(&graph);
@@ -950,6 +928,154 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
         writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to create sink filter"), this);
         return;
     }
+
+    // Set output format constraints on the sink to match encoder requirements
+    static const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE };
+    static const int64_t out_channel_layouts[] = { AV_CH_LAYOUT_STEREO, -1 };
+    static const int out_sample_rates[] = { 44100, -1 };
+
+    av_opt_set_int_list(sink_ctx, "sample_fmts", out_sample_fmts, AV_SAMPLE_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+    av_opt_set_int_list(sink_ctx, "channel_layouts", out_channel_layouts, -1, AV_OPT_SEARCH_CHILDREN);
+    av_opt_set_int_list(sink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
+
+    // Build filter chain by creating and linking filters manually
+    AVFilterContext *last_ctx = src_ctx;
+
+    // Create atempo filter if speed != 1.0
+    if (speed != 1.0f)
+    {
+        char atempo_args[64];
+        snprintf(atempo_args, sizeof(atempo_args), "tempo=%.2f", speed);
+        
+        const AVFilter *atempo_filter = avfilter_get_by_name("atempo");
+        if (!atempo_filter)
+        {
+            std::cerr << "  ERROR: atempo filter not found" << std::endl;
+            avfilter_graph_free(&graph);
+            avcodec_free_context(&enc_ctx);
+            avcodec_free_context(&dec_ctx);
+            avformat_close_input(&in_fmt);
+            status_ = FINISH;
+            writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "atempo filter not found"), this);
+            return;
+        }
+
+        AVFilterContext *atempo_ctx = nullptr;
+        if (int ret = avfilter_graph_create_filter(&atempo_ctx, atempo_filter, "atempo", atempo_args, nullptr, graph))
+        {
+            std::cerr << "  ERROR: failed to create atempo filter: " << av_err_to_string(ret) << std::endl;
+            avfilter_graph_free(&graph);
+            avcodec_free_context(&enc_ctx);
+            avcodec_free_context(&dec_ctx);
+            avformat_close_input(&in_fmt);
+            status_ = FINISH;
+            writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to create atempo filter"), this);
+            return;
+        }
+
+        if (int ret = avfilter_link(last_ctx, 0, atempo_ctx, 0))
+        {
+            std::cerr << "  ERROR: failed to link to atempo: " << av_err_to_string(ret) << std::endl;
+            avfilter_graph_free(&graph);
+            avcodec_free_context(&enc_ctx);
+            avcodec_free_context(&dec_ctx);
+            avformat_close_input(&in_fmt);
+            status_ = FINISH;
+            writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to link atempo filter"), this);
+            return;
+        }
+        last_ctx = atempo_ctx;
+        std::cout << "  Added atempo filter: " << atempo_args << std::endl;
+    }
+
+    // Create rubberband filter if pitch != 1.0 (if available)
+    if (pitch != 1.0f)
+    {
+        const AVFilter *rubberband_filter = avfilter_get_by_name("rubberband");
+        if (rubberband_filter)
+        {
+            char rubberband_args[128];
+            snprintf(rubberband_args, sizeof(rubberband_args), "pitch=%.2f", pitch);
+
+            AVFilterContext *rubberband_ctx = nullptr;
+            if (int ret = avfilter_graph_create_filter(&rubberband_ctx, rubberband_filter, "rubberband", rubberband_args, nullptr, graph))
+            {
+                std::cerr << "  WARNING: failed to create rubberband filter: " << av_err_to_string(ret) << std::endl;
+                std::cerr << "  Pitch shifting will be skipped" << std::endl;
+            }
+            else
+            {
+                if (int ret = avfilter_link(last_ctx, 0, rubberband_ctx, 0))
+                {
+                    std::cerr << "  WARNING: failed to link to rubberband: " << av_err_to_string(ret) << std::endl;
+                }
+                else
+                {
+                    last_ctx = rubberband_ctx;
+                    std::cout << "  Added rubberband filter: " << rubberband_args << std::endl;
+                }
+            }
+        }
+        else
+        {
+            std::cerr << "  WARNING: rubberband filter not available, pitch shifting skipped" << std::endl;
+        }
+    }
+
+    // Create aformat filter to convert to encoder's expected format
+    char aformat_args[256];
+    snprintf(aformat_args, sizeof(aformat_args),
+             "sample_fmts=%s:sample_rates=%d:channel_layouts=stereo",
+             av_get_sample_fmt_name(AV_SAMPLE_FMT_FLTP),
+             enc_ctx->sample_rate);
+
+    const AVFilter *aformat_filter = avfilter_get_by_name("aformat");
+    if (aformat_filter)
+    {
+        AVFilterContext *aformat_ctx = nullptr;
+        if (int ret = avfilter_graph_create_filter(&aformat_ctx, aformat_filter, "aformat", aformat_args, nullptr, graph))
+        {
+            std::cerr << "  WARNING: failed to create aformat filter: " << av_err_to_string(ret) << std::endl;
+        }
+        else
+        {
+            if (int ret = avfilter_link(last_ctx, 0, aformat_ctx, 0))
+            {
+                std::cerr << "  WARNING: failed to link to aformat: " << av_err_to_string(ret) << std::endl;
+            }
+            else
+            {
+                last_ctx = aformat_ctx;
+                std::cout << "  Added aformat filter: " << aformat_args << std::endl;
+            }
+        }
+    }
+
+    // Add asetnsamples filter to ensure exactly 1152 samples per frame (required by MP3 encoder)
+    const AVFilter *asetnsamples_filter = avfilter_get_by_name("asetnsamples");
+    if (asetnsamples_filter)
+    {
+        AVFilterContext *asetnsamples_ctx = nullptr;
+        // MP3 frame size is 1152 samples, pad the last frame
+        if (int ret = avfilter_graph_create_filter(&asetnsamples_ctx, asetnsamples_filter, "asetnsamples", "n=1152:p=1", nullptr, graph))
+        {
+            std::cerr << "  WARNING: failed to create asetnsamples filter: " << av_err_to_string(ret) << std::endl;
+        }
+        else
+        {
+            if (int ret = avfilter_link(last_ctx, 0, asetnsamples_ctx, 0))
+            {
+                std::cerr << "  WARNING: failed to link to asetnsamples: " << av_err_to_string(ret) << std::endl;
+            }
+            else
+            {
+                last_ctx = asetnsamples_ctx;
+                std::cout << "  Added asetnsamples filter: n=1152:p=1" << std::endl;
+            }
+        }
+    }
+
+    // Link the last filter to the sink
     if (int ret = avfilter_link(last_ctx, 0, sink_ctx, 0))
     {
         std::cerr << "  ERROR: failed to link to sink: " << av_err_to_string(ret) << std::endl;
@@ -962,6 +1088,7 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
         return;
     }
 
+    // Configure the filter graph
     if (int ret = avfilter_graph_config(graph, nullptr))
     {
         std::cerr << "  ERROR: avfilter_graph_config: " << av_err_to_string(ret) << std::endl;
@@ -973,6 +1100,8 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::start_processing()
         writer_.Finish(grpc::Status(grpc::StatusCode::INTERNAL, "Failed to configure filter graph"), this);
         return;
     }
+
+    std::cout << "  Filter graph configured successfully" << std::endl;
 
     // Store for processing
     streaming_in_fmt_ = in_fmt;
@@ -991,8 +1120,6 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
     if (streaming_no_effects_)
     {
         // Read directly from input file and stream as MP3 chunks
-        // For simplicity, just read raw bytes and return
-        // A full implementation would re-encode to MP3 for consistency
         if (!ffmpeg_pipe_)
         {
             std::string cmd = "ffmpeg -i \"" + request_.audio_path() + "\" -acodec libmp3lame -ab 192k -ar 44100 -f mp3 - 2>/dev/null";
@@ -1027,60 +1154,119 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
         streaming_filtered_frame_ = av_frame_alloc();
     }
 
-    // Read packets from input
-    AVPacket *pkt = av_packet_alloc();
     bool got_output = false;
 
-    while (av_read_frame(streaming_in_fmt_, pkt) >= 0)
-    {
-        if (pkt->stream_index == streaming_audio_stream_idx_)
+    // Helper lambda to try encoding filtered frames and sending output
+    auto try_encode_and_send = [&]() -> bool {
+        while (av_buffersink_get_frame(streaming_sink_ctx_, streaming_filtered_frame_) >= 0)
         {
-            avcodec_send_packet(streaming_dec_ctx_, pkt);
+            // Set proper PTS for the encoder
+            streaming_filtered_frame_->pts = streaming_pts_;
+            streaming_pts_ += streaming_filtered_frame_->nb_samples;
 
-            while (avcodec_receive_frame(streaming_dec_ctx_, streaming_frame_) == 0)
+            int ret = avcodec_send_frame(streaming_enc_ctx_, streaming_filtered_frame_);
+            av_frame_unref(streaming_filtered_frame_);
+            
+            if (ret < 0)
             {
-                // Push frame to filter
-                if (av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, 0) >= 0)
+                continue;
+            }
+
+            AVPacket *enc_pkt = av_packet_alloc();
+            while (avcodec_receive_packet(streaming_enc_ctx_, enc_pkt) >= 0)
+            {
+                soundboard::AudioChunk chunk;
+                chunk.set_data(enc_pkt->data, enc_pkt->size);
+                chunk.set_sequence_number(chunk_sequence_++);
+                status_ = WRITING;
+                av_packet_unref(enc_pkt);
+                av_packet_free(&enc_pkt);
+                writer_.Write(chunk, this);
+                return true;
+            }
+            av_packet_free(&enc_pkt);
+        }
+        return false;
+    };
+
+    // Phase 1: Read and decode packets from input
+    if (!decoder_flushed_)
+    {
+        AVPacket *pkt = av_packet_alloc();
+        int read_ret = av_read_frame(streaming_in_fmt_, pkt);
+        
+        if (read_ret >= 0)
+        {
+            if (pkt->stream_index == streaming_audio_stream_idx_)
+            {
+                avcodec_send_packet(streaming_dec_ctx_, pkt);
+
+                while (avcodec_receive_frame(streaming_dec_ctx_, streaming_frame_) == 0)
                 {
-                    // Pull filtered frames
-                    while (av_buffersink_get_frame(streaming_sink_ctx_, streaming_filtered_frame_) >= 0)
+                    // Push frame to filter graph
+                    av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF);
+                    av_frame_unref(streaming_frame_);
+
+                    // Try to get filtered output and encode
+                    if (try_encode_and_send())
                     {
-                        // Encode filtered frame
-                        if (avcodec_send_frame(streaming_enc_ctx_, streaming_filtered_frame_) >= 0)
-                        {
-                            AVPacket *enc_pkt = av_packet_alloc();
-                            while (avcodec_receive_packet(streaming_enc_ctx_, enc_pkt) >= 0)
-                            {
-                                soundboard::AudioChunk chunk;
-                                chunk.set_data(enc_pkt->data, enc_pkt->size);
-                                chunk.set_sequence_number(chunk_sequence_++);
-                                status_ = WRITING;
-                                av_packet_free(&enc_pkt);
-                                writer_.Write(chunk, this);
-                                got_output = true;
-                                break; // Send one chunk at a time for streaming
-                            }
-                        }
-                        av_frame_unref(streaming_filtered_frame_);
-                        if (got_output)
-                            break;
+                        got_output = true;
+                        break;
                     }
                 }
-                av_frame_unref(streaming_frame_);
-                if (got_output)
-                    break;
+            }
+            av_packet_unref(pkt);
+        }
+        else
+        {
+            // End of input - start flushing decoder
+            decoder_flushed_ = true;
+            avcodec_send_packet(streaming_dec_ctx_, nullptr);
+        }
+        av_packet_free(&pkt);
+    }
+
+    // Phase 2: Flush decoder
+    if (!got_output && decoder_flushed_ && !filter_flushed_)
+    {
+        while (avcodec_receive_frame(streaming_dec_ctx_, streaming_frame_) == 0)
+        {
+            av_buffersrc_add_frame_flags(streaming_src_ctx_, streaming_frame_, AV_BUFFERSRC_FLAG_KEEP_REF);
+            av_frame_unref(streaming_frame_);
+
+            if (try_encode_and_send())
+            {
+                got_output = true;
+                break;
             }
         }
-        av_packet_unref(pkt);
-        if (got_output)
-            break;
-    }
-    av_packet_free(&pkt);
 
-    if (!got_output)
+        if (!got_output)
+        {
+            // Flush the filter graph
+            filter_flushed_ = true;
+            av_buffersrc_add_frame_flags(streaming_src_ctx_, nullptr, 0);
+        }
+    }
+
+    // Phase 3: Flush filter graph
+    if (!got_output && filter_flushed_ && !encoder_flushed_)
     {
-        // Flush encoder
-        avcodec_send_frame(streaming_enc_ctx_, nullptr);
+        if (try_encode_and_send())
+        {
+            got_output = true;
+        }
+        else
+        {
+            // Flush encoder
+            encoder_flushed_ = true;
+            avcodec_send_frame(streaming_enc_ctx_, nullptr);
+        }
+    }
+
+    // Phase 4: Flush encoder
+    if (!got_output && encoder_flushed_)
+    {
         AVPacket *enc_pkt = av_packet_alloc();
         if (avcodec_receive_packet(streaming_enc_ctx_, enc_pkt) >= 0)
         {
@@ -1088,14 +1274,24 @@ void AudioProcessorAsync::ApplyEffectsStreamCallData::send_next_chunk()
             chunk.set_data(enc_pkt->data, enc_pkt->size);
             chunk.set_sequence_number(chunk_sequence_++);
             status_ = WRITING;
+            av_packet_unref(enc_pkt);
             av_packet_free(&enc_pkt);
             writer_.Write(chunk, this);
+            got_output = true;
         }
         else
         {
             av_packet_free(&enc_pkt);
             finish_stream();
+            return;
         }
+    }
+
+    // If no output was produced in phase 1, continue processing
+    if (!got_output && !decoder_flushed_)
+    {
+        // Continue to next iteration
+        send_next_chunk();
     }
 }
 

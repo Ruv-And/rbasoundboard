@@ -82,6 +82,12 @@ private:
         int streaming_audio_stream_idx_;
         std::string streaming_filter_desc_;
         
+        // Flushing state
+        bool decoder_flushed_;
+        bool filter_flushed_;
+        bool encoder_flushed_;
+        int64_t streaming_pts_;
+        
         void start_processing();
         void send_next_chunk();
         void finish_stream();

@@ -261,7 +261,7 @@ const ClipCard: React.FC<ClipCardProps> = ({ clip, onPlay, onDelete }) => {
               {clip.title}
             </h3>
             <p className="text-xs pl-1 text-gray-500 truncate">
-              {clip.author || "Unknown"}
+              {clip.uploadedBy || "Unknown"}
             </p>
           </div>
         </div>
